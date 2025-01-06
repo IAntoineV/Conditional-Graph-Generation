@@ -87,6 +87,8 @@ class DenoiseNN(nn.Module):
         self.relu = nn.ReLU()
         self.tanh = nn.Tanh()
 
+        print(f"Number of parameters in Denoise model : {sum(p.numel() for p in self.parameters() if p.requires_grad)}")
+
     def forward(self, x, t, cond):
         cond = torch.reshape(cond, (-1, self.n_cond))
         cond = torch.nan_to_num(cond, nan=-100.0)

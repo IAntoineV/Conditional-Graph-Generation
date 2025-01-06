@@ -2,6 +2,7 @@ import os
 from tqdm import tqdm
 import random
 import re
+from sentence_transformers import SentenceTransformer
 
 random.seed(32)
 
@@ -15,9 +16,18 @@ def extract_numbers(text):
 
 def extract_feats(file):
     stats = []
-    fread = open(file,"r")
+    fread = open(file, "r")
     line = fread.read()
     line = line.strip()
     stats = extract_numbers(line)
     fread.close()
     return stats
+
+
+def extract_feats_using_model(model, file):
+    with open(file, "r") as fread:
+        text = fread.read().strip()
+    embeddings = model.encode([text], convert_to_tensor=True)
+    print(f"{embeddings.shape=}")
+    return embeddings.squeeze(0)
+
