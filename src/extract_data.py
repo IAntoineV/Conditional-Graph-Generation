@@ -112,5 +112,4 @@ def create_features(adj,num_nodes, edge_index = None):
 
 def compute_MAE(adj_matrices, num_nodes_batched, features_true):
     features_pred = torch.stack(list(map(lambda x: create_features(*x), zip(adj_matrices, num_nodes_batched))))
-    print((features_pred - features_true).abs())
     return (features_true - features_pred).abs().mean()
