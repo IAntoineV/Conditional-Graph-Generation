@@ -15,13 +15,13 @@ def get_num_triangle(adj_dense):
     return (adj_dense @ adj_dense @ adj_dense).diagonal().sum() / 6
 
 
-def get_mean_degree(adj_dense):
+def get_mean_degree(adj_dense, num_nodes):
     """
     This function output the average degree in the graph. It is a differentiable function (gradient flow through it).
     :param adj_dense: torch dense adjacency matrix
     :return: torch float scalar, the average degree in the graph.
     """
-    return adj_dense.sum() / adj_dense.shape[0]
+    return adj_dense.sum() / num_nodes
 
 def get_nb_edges(adj_dense):
     return adj_dense.sum() /2
@@ -92,6 +92,8 @@ def get_nb_communities(adj):
     G = nx.from_numpy_array(adj.cpu().numpy())
     G = nx.from_numpy_array(adj.cpu().numpy())
 
+    # Remove isolated nodes
+    G.remove_nodes_from(list(nx.isolates(G)))
     # Apply the Louvain method for community detection
     partition = best_partition(G)
     # Get the number of communities (i.e., unique values in the partition)
@@ -102,8 +104,13 @@ def get_nb_communities(adj):
 def create_features(adj,num_nodes, edge_index = None):
     if edge_index is None:
         edge_index = dense_to_edge_index(adj)
-    features = [num_nodes, get_nb_edges(adj), get_mean_degree(adj), get_num_triangle(adj)]
+    features = [num_nodes, get_nb_edges(adj), get_mean_degree(adj, num_nodes), get_num_triangle(adj)]
     num_triangles = features[-1]
     features = features + [get_g_cluster_coef(adj, num_triangles), get_max_k_core(edge_index, num_nodes), get_nb_communities(adj)]
     return torch.Tensor(features).float()
 
+
+def compute_MAE(adj_matrices, num_nodes_batched, features_true):
+    features_pred = torch.stack(list(map(lambda x: create_features(*x), zip(adj_matrices, num_nodes_batched))))
+    print((features_pred - features_true).abs())
+    return (features_true - features_pred).abs().mean()
