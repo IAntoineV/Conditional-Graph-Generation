@@ -5,7 +5,8 @@ import torch.nn.functional as F
 from torch_geometric.nn import GINConv, GATConv
 from torch_geometric.nn import global_add_pool, global_mean_pool, global_max_pool
 from extract_data import compute_MAE
-
+from utils import MSE_reconstruction_loss
+from graph_utils import get_num_nodes
 
 # Decoder
 class Decoder(nn.Module):
@@ -277,6 +278,7 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
         return min(epoch / (max_epochs * 0.2), 1.0) * beta_max
 
     def metrics(self, data, data_aug, beta=0.05, gamma=0.005):
+        infos = {}
         x_g = self.encoder(data)
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
@@ -285,7 +287,7 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
 
         mae = compute_MAE(adj.detach().cpu(), (adj.sum(dim=2) >= 1).sum(dim=-1).detach().cpu(),
                           data.stats.detach().cpu())
-
+        infos["mae"] = mae
         # Augmented data encodings
         x_g_aug = self.encoder(data_aug)
         mu_aug = self.fc_mu(x_g_aug)
@@ -302,10 +304,13 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
 
         # Combined loss
         loss = recon + beta * kld + gamma * infonce
-
-        return loss, recon, kld, infonce, mae
+        infos["kld"] = kld
+        infos["infonce"] = infonce
+        infos["loss"] = loss
+        return loss, infos
 
     def loss_function(self, data, data_aug, beta=0.05, gamma=0.005):
+        infos = {}
         # Original VAE encodings
         x_g = self.encoder(data)
         mu = self.fc_mu(x_g)
@@ -329,6 +334,49 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
 
         # Combined loss
         loss = recon + beta * kld + gamma * infonce
+        infos["kld"] = kld
+        infos["infonce"] = infonce
+        infos["loss"] = loss
+        return loss, infos
 
-        return loss, recon, kld, infonce
 
+    def loss_with_mse_reg(self, data, data_aug, beta=0.05, gamma=0.005, lbd_reg = 1e-3):
+
+        infos = {}
+        x_g = self.encoder(data)
+        mu = self.fc_mu(x_g)
+        logvar = self.fc_logvar(x_g)
+        z = self.reparameterize(mu, logvar)
+        adj = self.decoder(z)
+
+        mae = compute_MAE(adj.detach().cpu(), (adj.sum(dim=2) >= 1).sum(dim=-1).detach().cpu(),
+                          data.stats.detach().cpu())
+
+        infos["mae"]=mae
+        # Augmented data encodings
+        x_g_aug = self.encoder(data_aug)
+        mu_aug = self.fc_mu(x_g_aug)
+        logvar_aug = self.fc_logvar(x_g_aug)
+        z_aug = self.reparameterize(mu_aug, logvar_aug)
+
+        # Original VAE losses
+        # recon = F.l1_loss(adj, data.A, reduction='mean') +  F.binary_cross_entropy(adj, data.A, reduction='mean')
+        recon = F.mse_loss(adj, data.A, reduction='mean')
+        kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+
+        # InfoNCE loss
+        infonce = self.infonce_loss(z, z_aug)
+
+        num_nodes = get_num_nodes(adj)
+        mse_features = MSE_reconstruction_loss(adj, num_nodes, data.stats)
+
+
+        # Combined loss
+        loss = recon + beta * kld + gamma * infonce + lbd_reg * mse_features
+
+        infos["kld"] = kld
+        infos["infonce"] = infonce
+        infos["mse_features"] = mse_features
+        infos["loss"] = loss
+
+        return loss, infos

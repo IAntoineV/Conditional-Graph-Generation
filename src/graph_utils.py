@@ -11,3 +11,8 @@ def dense_to_edge_index(adj_matrix):
 
 def edge_index_to_dense(edge_index, num_nodes):
     return torch.sparse_coo_tensor(edge_index, torch.ones(edge_index.shape[1]), (num_nodes, num_nodes)).to_dense()
+
+
+def get_num_nodes(adj_matrix):
+    return (adj_matrix.sum(dim=-1) >=1).sum(dim=-1)
+

@@ -180,142 +180,86 @@ scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr, epoch
 
 # Train VGAE model
 if args.train_autoencoder:
-    if args.train_infonce:
-        best_val_loss = np.inf
-        for epoch in range(1, args.epochs_autoencoder + 1):
-            autoencoder.train()
-            train_loss_all = 0
-            train_count = 0
-            train_loss_all_recon = 0
-            train_loss_all_kld = 0
-            train_loss_all_infonce = 0
-            cnt_train = 0
+    best_val_loss = np.inf
+    for epoch in range(1, args.epochs_autoencoder + 1):
+        autoencoder.train()
+        train_loss_all = 0
+        train_count = 0
+        train_loss_all_recon = 0
+        train_loss_all_kld = 0
+        train_loss_all_infonce = 0
+        cnt_train = 0
 
-            for data in train_loader:
+        for data in train_loader:
+            data = data.to(device)
+            # Create augmented view
+            data_aug = edge_drop(data)
+            data_aug = data_aug.to(device)
+
+            optimizer.zero_grad()
+            # beta = autoencoder.get_beta(epoch, max_epochs=args.epochs_autoencoder)
+            # Updated loss function now returns InfoNCE loss as well
+            loss, infos= autoencoder.loss_function(data, data_aug, beta=args.beta_vae,
+                                                                  gamma=args.gamma_vae)
+
+            train_loss_all_recon += infos["recon"].item()
+            train_loss_all_kld += infos["kld"].item()
+            train_loss_all_infonce += infos["infonce"].item()
+            cnt_train += 1
+
+            loss.backward()
+            train_loss_all += loss.item()
+            train_count += torch.max(data.batch) + 1
+            optimizer.step()
+
+        autoencoder.eval()
+        val_loss_all = 0
+        val_count = 0
+        cnt_val = 0
+        val_loss_all_recon = 0
+        val_loss_all_kld = 0
+        val_loss_all_infonce = 0
+        val_mae = 0
+
+        with torch.no_grad():
+            for data in val_loader:
                 data = data.to(device)
-                # Create augmented view
+                # Create augmented view for validation as well
                 data_aug = edge_drop(data)
                 data_aug = data_aug.to(device)
 
-                optimizer.zero_grad()
-                # beta = autoencoder.get_beta(epoch, max_epochs=args.epochs_autoencoder)
-                # Updated loss function now returns InfoNCE loss as well
-                loss, recon, kld, infonce = autoencoder.loss_function(data, data_aug, beta=args.beta_vae,
-                                                                      gamma=args.gamma_vae)
+                loss, infos = autoencoder.metrics(data, data_aug, beta=args.beta_vae,
+                                                                     gamma=args.gamma_vae)
 
-                train_loss_all_recon += recon.item()
-                train_loss_all_kld += kld.item()
-                train_loss_all_infonce += infonce.item()
-                cnt_train += 1
-
-                loss.backward()
-                train_loss_all += loss.item()
-                train_count += torch.max(data.batch) + 1
-                optimizer.step()
-
-            autoencoder.eval()
-            val_loss_all = 0
-            val_count = 0
-            cnt_val = 0
-            val_loss_all_recon = 0
-            val_loss_all_kld = 0
-            val_loss_all_infonce = 0
-            val_mae = 0
-
-            with torch.no_grad():
-                for data in val_loader:
-                    data = data.to(device)
-                    # Create augmented view for validation as well
-                    data_aug = edge_drop(data)
-                    data_aug = data_aug.to(device)
-
-                    loss, recon, kld, infonce, mae = autoencoder.metrics(data, data_aug, beta=args.beta_vae,
-                                                                         gamma=args.gamma_vae)
-
-                    val_loss_all_recon += recon.item()
-                    val_loss_all_kld += kld.item()
-                    val_loss_all_infonce += infonce.item()
-                    val_loss_all += loss.item()
-                    val_mae += mae
-                    cnt_val += 1
-                    val_count += torch.max(data.batch) + 1
-
-            if epoch % 1 == 0:
-                dt_t = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-                print(f'{dt_t} Epoch: {epoch:04d}, '
-                      f'Train Loss: {train_loss_all / cnt_train:.5f}, '
-                      f'Train Recon: {train_loss_all_recon / cnt_train:.2f}, '
-                      f'Train KLD: {train_loss_all_kld / cnt_train:.2f}, '
-                      f'Train InfoNCE: {train_loss_all_infonce / cnt_train:.2f}, '
-                      f'Val Loss: {val_loss_all / cnt_val:.5f}, '
-                      f'Val Recon: {val_loss_all_recon / cnt_val:.2f}, '
-                      f'Val KLD: {val_loss_all_kld / cnt_val:.2f}, '
-                      f'Val InfoNCE: {val_loss_all_infonce / cnt_val:.2f}, '
-                      f'Val MAE : {val_mae / cnt_val:.2f}')
-
-            scheduler.step()
-
-            if best_val_loss >= val_loss_all:
-                best_val_loss = val_loss_all
-                torch.save({
-                    'state_dict': autoencoder.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                }, f'models/{date}_autoencoder_infonce.pth.tar')
-    else:
-
-        best_val_loss = np.inf
-        for epoch in range(1, args.epochs_autoencoder + 1):
-            autoencoder.train()
-            train_loss_all = 0
-            train_count = 0
-            train_loss_all_recon = 0
-            train_loss_all_kld = 0
-            cnt_train = 0
-
-            for data in train_loader:
-                data = data.to(device)
-                optimizer.zero_grad()
-                loss, recon, kld = autoencoder.loss_function(data)
-                train_loss_all_recon += recon.item()
-                train_loss_all_kld += kld.item()
-                cnt_train += 1
-                loss.backward()
-                train_loss_all += loss.item()
-                train_count += torch.max(data.batch) + 1
-                optimizer.step()
-
-            autoencoder.eval()
-            val_loss_all = 0
-            val_count = 0
-            cnt_val = 0
-            val_loss_all_recon = 0
-            val_loss_all_kld = 0
-
-            for data in val_loader:
-                data = data.to(device)
-                loss, recon, kld = autoencoder.loss_function(data)
-                val_loss_all_recon += recon.item()
-                val_loss_all_kld += kld.item()
+                train_loss_all_recon += infos["recon"].item()
+                train_loss_all_kld += infos["kld"].item()
+                train_loss_all_infonce += infos["infonce"].item()
                 val_loss_all += loss.item()
+                val_mae += infos["mae"]
                 cnt_val += 1
                 val_count += torch.max(data.batch) + 1
 
-            if epoch % 1 == 0:
-                dt_t = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-                print(
-                    '{} Epoch: {:04d}, Train Loss: {:.5f}, Train Reconstruction Loss: {:.3f}, Train KLD Loss: {:.2f}, Val Loss: {:.5f}, Val Reconstruction Loss: {:.3f}, Val KLD Loss: {:.2f}'.format(
-                        dt_t, epoch, train_loss_all / cnt_train, train_loss_all_recon / cnt_train,
-                        train_loss_all_kld / cnt_train, val_loss_all / cnt_val, val_loss_all_recon / cnt_val,
-                        val_loss_all_kld / cnt_val))
+        if epoch % 1 == 0:
+            dt_t = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+            print(f'{dt_t} Epoch: {epoch:04d}, '
+                  f'Train Loss: {train_loss_all / cnt_train:.5f}, '
+                  f'Train Recon: {train_loss_all_recon / cnt_train:.2f}, '
+                  f'Train KLD: {train_loss_all_kld / cnt_train:.2f}, '
+                  f'Train InfoNCE: {train_loss_all_infonce / cnt_train:.2f}, '
+                  f'Val Loss: {val_loss_all / cnt_val:.5f}, '
+                  f'Val Recon: {val_loss_all_recon / cnt_val:.2f}, '
+                  f'Val KLD: {val_loss_all_kld / cnt_val:.2f}, '
+                  f'Val InfoNCE: {val_loss_all_infonce / cnt_val:.2f}, '
+                  f'Val MAE : {val_mae / cnt_val:.2f}')
 
-            scheduler.step()
+        scheduler.step()
 
-            if best_val_loss >= val_loss_all:
-                best_val_loss = val_loss_all
-                torch.save({
-                    'state_dict': autoencoder.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                }, f'models/{date}_autoencoder.pth.tar')
+        if best_val_loss >= val_loss_all:
+            best_val_loss = val_loss_all
+            torch.save({
+                'state_dict': autoencoder.state_dict(),
+                'optimizer': optimizer.state_dict(),
+            }, f'models/{date}_autoencoder_infonce.pth.tar')
     print("Taking best autoencoder to train denoiser")
     print(f"Loading autoencoder from {date}")
     checkpoint = torch.load(f'models/{date}_autoencoder_infonce.pth.tar')
@@ -371,7 +315,7 @@ if args.train_denoiser:
             optimizer.zero_grad()
             x_g = autoencoder.encode(data)
             t = torch.randint(0, args.timesteps, (x_g.size(0),), device=device).long()
-            loss = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod,
+            loss,infos = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod,
                             loss_type="huber")
             loss.backward()
             train_loss_all += x_g.size(0) * loss.item()
@@ -387,7 +331,7 @@ if args.train_denoiser:
                 data = data.to(device)
                 x_g = autoencoder.encode(data)
                 t = torch.randint(0, args.timesteps, (x_g.size(0),), device=device).long()
-                loss = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod,
+                loss,infos = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod,
                                 loss_type="huber")
                 val_loss_all += x_g.size(0) * loss.item()
                 val_count += x_g.size(0)
@@ -438,7 +382,7 @@ else:
             data = data.to(device)
             x_g = autoencoder.encode(data)
             t = torch.randint(0, args.timesteps, (x_g.size(0),), device=device).long()
-            loss = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod,
+            loss,infos = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod,
                             loss_type="huber")
             val_loss_all += x_g.size(0) * loss.item()
             val_count += x_g.size(0)

@@ -370,3 +370,5 @@ def MAE_reconstruction_loss(adj_matrices, num_nodes_batched, features_true):
     features_pred = features_diff(adj_matrices, num_nodes_batched)
 
     return (features_pred - features_true_projected).abs().sum(dim=1).mean()
+
+

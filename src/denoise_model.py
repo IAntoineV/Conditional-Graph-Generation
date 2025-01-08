@@ -3,6 +3,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from utils import MSE_reconstruction_loss
+from graph_utils import get_num_nodes
 def extract(a, t, x_shape):
     batch_size = t.shape[0]
     out = a.gather(-1, t.cpu())
@@ -22,6 +24,47 @@ def q_sample(x_start, t, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, noi
     return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
 
 
+def reconstruct(x_noised, t, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, noise):
+    sqrt_one_minus_alphas_cumprod_t = extract(
+        sqrt_one_minus_alphas_cumprod, t, x_noised.shape
+    )
+    sqrt_alphas_cumprod_t = extract(sqrt_alphas_cumprod, t, x_noised.shape)
+
+    x_reconstructed = (x_noised - sqrt_one_minus_alphas_cumprod_t * noise) / sqrt_alphas_cumprod_t
+    return x_reconstructed
+
+# Loss function for denoising
+def p_losses_with_features_reg(denoise_model, x_start, t, cond, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, decoder, features, noise=None, loss_type="l1", lbd_reg = 1):
+
+    infos = {}
+    if noise is None:
+        noise = torch.randn_like(x_start)
+
+    x_noisy = q_sample(x_start, t, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, noise=noise)
+    predicted_noise = denoise_model(x_noisy, t, cond)
+    x_reconstructed = reconstruct(x_noisy, t, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, noise)
+
+    adj = decoder(x_reconstructed)
+    num_nodes = get_num_nodes(adj).int()
+
+    loss_mse_reg = lbd_reg* MSE_reconstruction_loss(adj, num_nodes, features)
+    if loss_type == 'l1':
+        loss_dif = F.l1_loss(noise, predicted_noise)
+    elif loss_type == 'l2':
+        loss_dif = F.mse_loss(noise, predicted_noise)
+    elif loss_type == "huber":
+        loss_dif = F.smooth_l1_loss(noise, predicted_noise)
+    else:
+        raise NotImplementedError()
+    loss = loss_dif + lbd_reg*loss_mse_reg
+
+    infos["loss_dif"] = loss_dif
+    infos["loss_mse_reg"] = loss_mse_reg
+    infos["loss"] = loss
+    return loss, infos
+
+
+
 # Loss function for denoising
 def p_losses(denoise_model, x_start, t, cond, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, noise=None, loss_type="l1"):
     if noise is None:
@@ -39,8 +82,7 @@ def p_losses(denoise_model, x_start, t, cond, sqrt_alphas_cumprod, sqrt_one_minu
     else:
         raise NotImplementedError()
 
-    return loss
-
+    return loss, {}
 
 # Position embeddings
 class SinusoidalPositionEmbeddings(nn.Module):

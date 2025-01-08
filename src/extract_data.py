@@ -141,6 +141,7 @@ def get_nb_communities(adj):
     return num_communities
 
 
+
 def create_features(adj,num_nodes, edge_index = None):
     mask = adj.sum(dim=1)>=1
     adj = adj[mask]
@@ -155,7 +156,6 @@ def create_features(adj,num_nodes, edge_index = None):
 
 
 def compute_MAE(adj_matrices, num_nodes_batched, features_true):
-    adj_matrices = [adj[adj.sum(dim=1) != 0][:, adj.sum(dim=0) != 0] for adj in adj_matrices]
     features_pred = torch.stack(list(map(lambda x: create_features(*x), zip(adj_matrices, num_nodes_batched))))
     return (features_true - features_pred).abs().mean()
 
