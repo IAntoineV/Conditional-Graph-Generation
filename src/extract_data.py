@@ -26,7 +26,7 @@ def get_mean_degree(adj_dense, num_nodes):
 def get_nb_edges(adj_dense):
     return adj_dense.sum() /2
 
-def get_g_cluster_coef(adj_dense, num_triangle):
+def get_g_cluster_coef(adj_dense, num_triangle, epsilon=1):
     """
     Formula : $$num_triangles/ ( 1/2 * sum(degree*(degree-1)) ) $$
 
@@ -36,7 +36,7 @@ def get_g_cluster_coef(adj_dense, num_triangle):
     :return:
     """
     degrees = adj_dense.sum(dim=1)
-    return  6 * num_triangle / (degrees * (degrees-1)).sum()
+    return  6 * num_triangle / ((degrees * (degrees-1)).sum()+epsilon)
 
 
 def get_max_k_core(edge_index, num_nodes):
@@ -90,7 +90,6 @@ def get_nb_communities(adj):
     :return:
     """
     G = nx.from_numpy_array(adj.cpu().numpy())
-    G = nx.from_numpy_array(adj.cpu().numpy())
 
     # Remove isolated nodes
     G.remove_nodes_from(list(nx.isolates(G)))
@@ -102,12 +101,16 @@ def get_nb_communities(adj):
 
 
 def create_features(adj,num_nodes, edge_index = None):
+    mask = adj.sum(dim=1)>=1
+    adj = adj[mask]
+    adj = adj[:,mask]
     if edge_index is None:
         edge_index = dense_to_edge_index(adj)
     features = [num_nodes, get_nb_edges(adj), get_mean_degree(adj, num_nodes), get_num_triangle(adj)]
     num_triangles = features[-1]
     features = features + [get_g_cluster_coef(adj, num_triangles), get_max_k_core(edge_index, num_nodes), get_nb_communities(adj)]
-    return torch.Tensor(features).float()
+    res = torch.Tensor(features).float()
+    return res
 
 
 def compute_MAE(adj_matrices, num_nodes_batched, features_true):
