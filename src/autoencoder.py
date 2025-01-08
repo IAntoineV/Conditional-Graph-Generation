@@ -285,7 +285,7 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
         z = self.reparameterize(mu, logvar)
         adj = self.decoder(z)
         adj_cpu = adj.detach().cpu()
-        num_nodes = get_num_nodes(adj)
+        num_nodes = get_num_nodes(adj_cpu)
         if full_mae:
             mae = compute_MAE(adj_cpu, num_nodes, data.stats.detach().cpu())
         else:
@@ -355,7 +355,7 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
         adj = self.decoder(z)
 
         adj_cpu = adj.detach().cpu()
-        num_nodes = get_num_nodes(adj)
+        num_nodes = get_num_nodes(adj_cpu)
         if full_mae:
             mae = compute_MAE(adj_cpu, num_nodes, data.stats.detach().cpu())
         else:

@@ -361,14 +361,14 @@ def preprocess_dataset_with_pretrained_embedder(dataset, n_max_nodes, spectral_e
 def MSE_reconstruction_loss(adj_matrices, num_nodes_batched, features_true):
     features_true_projected = features_true[:,:5]
     features_pred=features_diff(adj_matrices, num_nodes_batched)
-
-    return ((features_pred - features_true_projected)**2).sum(dim=1).mean()
+    nb = features_pred.shape[0]
+    return ((features_pred - features_true_projected)**2).sum(dim=1).sqrt().mean() / nb
 
 
 def MAE_reconstruction_loss(adj_matrices, num_nodes_batched, features_true):
     features_true_projected = features_true[:, :5]
     features_pred = features_diff(adj_matrices, num_nodes_batched)
 
-    return (features_pred - features_true_projected).abs().sum(dim=1).mean()
+    return (features_pred - features_true_projected).abs().mean()
 
 

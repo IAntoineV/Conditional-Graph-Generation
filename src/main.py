@@ -141,6 +141,10 @@ parser.add_argument('--tau', type=float, default=1.0, help="tau argument for gum
 # Type of global pooling for encoder
 parser.add_argument('--use-pooling', type=str, default="add", help="Type of pooling to us in encoder")
 
+
+# coef for
+parser.add_argument('--lbd-reg', type=float, default=4e-3, help="coefficient scaling the feature loss")
+
 args = parser.parse_args()
 
 print(f"{args=}")
@@ -183,6 +187,7 @@ if args.train_autoencoder:
         train_loss_all_recon = 0
         train_loss_all_kld = 0
         train_loss_all_infonce = 0
+        train_loss_all_feats = 0
         cnt_train = 0
 
         for data in train_loader:
@@ -194,12 +199,13 @@ if args.train_autoencoder:
             optimizer.zero_grad()
             # beta = autoencoder.get_beta(epoch, max_epochs=args.epochs_autoencoder)
             # Updated loss function now returns InfoNCE loss as well
-            loss, infos= autoencoder.loss_function(data, data_aug, beta=args.beta_vae,
-                                                                  gamma=args.gamma_vae)
+            loss, infos= autoencoder.loss_with_mse_reg(data, data_aug, beta=args.beta_vae,
+                                                                  gamma=args.gamma_vae, lbd_reg=args.lbd_reg)
 
             train_loss_all_recon += infos["recon"].item()
             train_loss_all_kld += infos["kld"].item()
             train_loss_all_infonce += infos["infonce"].item()
+            train_loss_all_feats += infos["mse_features"].item()
             cnt_train += 1
 
             loss.backward()
@@ -214,6 +220,7 @@ if args.train_autoencoder:
         val_loss_all_recon = 0
         val_loss_all_kld = 0
         val_loss_all_infonce = 0
+        val_loss_all_feats = 0
         val_mae = 0
 
         with torch.no_grad():
@@ -223,12 +230,13 @@ if args.train_autoencoder:
                 data_aug = edge_drop(data)
                 data_aug = data_aug.to(device)
 
-                loss, infos = autoencoder.metrics(data, data_aug, beta=args.beta_vae,
-                                                                     gamma=args.gamma_vae)
+                loss, infos = autoencoder.loss_with_mse_reg(data, data_aug, beta=args.beta_vae,
+                                                                     gamma=args.gamma_vae, lbd_reg=args.lbd_reg)
 
-                val_loss_all_recon += infos["recon"].item()
-                val_loss_all_kld += infos["kld"].item()
-                val_loss_all_infonce += infos["infonce"].item()
+                train_loss_all_recon += infos["recon"].item()
+                train_loss_all_kld += infos["kld"].item()
+                train_loss_all_infonce += infos["infonce"].item()
+                val_loss_all_feats += infos["mse_features"].item()
                 val_loss_all += loss.item()
                 val_mae += infos["mae"]
                 cnt_val += 1
@@ -241,11 +249,13 @@ if args.train_autoencoder:
                   f'Train Recon: {train_loss_all_recon / cnt_train:.2f}, '
                   f'Train KLD: {train_loss_all_kld / cnt_train:.2f}, '
                   f'Train InfoNCE: {train_loss_all_infonce / cnt_train:.2f}, '
+                  f'Train MSE Features : {train_loss_all_feats / cnt_train:.2f}, '
                   f'Val Loss: {val_loss_all / cnt_val:.5f}, '
                   f'Val Recon: {val_loss_all_recon / cnt_val:.2f}, '
                   f'Val KLD: {val_loss_all_kld / cnt_val:.2f}, '
                   f'Val InfoNCE: {val_loss_all_infonce / cnt_val:.2f}, '
-                  f'Val MAE : {val_mae / cnt_val:.2f}')
+                  f'Val MAE : {val_mae / cnt_val:.2f}',
+                    f'Val MSE Features : {val_loss_all_feats / cnt_val:.2f}')
 
         scheduler.step()
 
@@ -342,7 +352,7 @@ if args.train_denoiser:
                                              stat.detach().cpu())
 
         dt_t = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-        print('{} Epoch: {:04d}, Train Loss: {:.5f}, Val Loss: {:.5f}, Val MAE '.format(dt_t, epoch,
+        print('{} Epoch: {:04d}, Train Loss: {:.5f}, Val Loss: {:.5f}, Val MAE: {:.5f} '.format(dt_t, epoch,
                                                                                         train_loss_all / train_count,
                                                                                         val_loss_all / val_count,
                                                                                         val_mae_feats / val_count))
