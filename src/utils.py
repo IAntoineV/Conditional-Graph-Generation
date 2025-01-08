@@ -18,7 +18,7 @@ import scipy.sparse as sparse
 from torch_geometric.data import Data
 
 from extract_feats import extract_feats, extract_numbers, extract_feats_using_model
-
+from extract_data import features_diff
 
 def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim):
     data_lst = []
@@ -356,3 +356,17 @@ def preprocess_dataset_with_pretrained_embedder(dataset, n_max_nodes, spectral_e
             torch.save(data_lst, filename)
             print(f'Dataset {filename} saved')
     return data_lst
+
+
+def MSE_reconstruction_loss(adj_matrices, num_nodes_batched, features_true):
+    features_true_projected = features_true[:,:5]
+    features_pred=features_diff(adj_matrices, num_nodes_batched)
+
+    return ((features_pred - features_true_projected)**2).sum(dim=1).mean()
+
+
+def MAE_reconstruction_loss(adj_matrices, num_nodes_batched, features_true):
+    features_true_projected = features_true[:, :5]
+    features_pred = features_diff(adj_matrices, num_nodes_batched)
+
+    return (features_pred - features_true_projected).abs().sum(dim=1).mean()

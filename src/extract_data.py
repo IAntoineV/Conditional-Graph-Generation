@@ -6,6 +6,25 @@ from graph_utils import dense_to_edge_index, edge_index_to_dense
 STATS = ["node", "edge", "degre", "triangles", "g_cluster_coef", "max_k_core", "communities"]
 
 
+
+def get_num_nodes_diff(adj):
+    """
+    Compute a differentiable approximation of the number of nodes
+    """
+
+    degree = adj.sum(dim=1)
+    return (1-torch.exp(-2*degree)).sum()
+
+def get_num_nodes_diff_batched(adj_batch):
+    """
+    Compute a differentiable approximation of the number of nodes for batch adjacency matrices
+    :param adj_batch:
+    :return:
+    """
+    degree = adj_batch.sum(dim=-1)
+    return (1-torch.exp(-2*degree)).sum(-1)
+
+
 def get_num_triangle(adj_dense):
     """
     This function output the number of triangles of our graph. It is a differentiable function (gradient flow through it).
@@ -13,6 +32,17 @@ def get_num_triangle(adj_dense):
     :return: torch float scalar, the number of triangles of our graph.
     """
     return (adj_dense @ adj_dense @ adj_dense).diagonal().sum() / 6
+
+def get_num_triangle_batched(adj_batch):
+    """
+    This function output the number of triangles of our adjacency matrices in a batched manner. It is a differentiable function (gradient flow through it).
+    :param adj_dense: torch dense adjacency matrix
+    :return: torch float scalar, the number of triangles of our graph.
+    """
+    adj_cubed = torch.matmul(torch.matmul(adj_batch, adj_batch), adj_batch)
+    # Extract the diagonal for each matrix in the batch
+    diagonals = torch.diagonal(adj_cubed, dim1=1, dim2=2)
+    return diagonals.sum(dim=1) / 6
 
 
 def get_mean_degree(adj_dense, num_nodes):
@@ -23,8 +53,15 @@ def get_mean_degree(adj_dense, num_nodes):
     """
     return adj_dense.sum() / num_nodes
 
+def get_mean_degree_batched(adj_batch, num_nodes_batched):
+
+    return adj_batch.sum(dim=(1,2)) / num_nodes_batched
+
 def get_nb_edges(adj_dense):
     return adj_dense.sum() /2
+
+def get_nb_edges_batched(adj_batch):
+    return adj_batch.sum(dim=(1,2)) /2
 
 def get_g_cluster_coef(adj_dense, num_triangle, epsilon=1):
     """
@@ -38,6 +75,10 @@ def get_g_cluster_coef(adj_dense, num_triangle, epsilon=1):
     degrees = adj_dense.sum(dim=1)
     return  6 * num_triangle / ((degrees * (degrees-1)).sum()+epsilon)
 
+def get_g_cluster_coef_batched(adj_batch, num_triangle_batched, epsilon=1):
+
+    degrees = adj_batch.sum(dim=-1)
+    return 6 * num_triangle_batched / ((degrees * (degrees - 1)).sum(dim=-1) + epsilon)
 
 def get_max_k_core(edge_index, num_nodes):
     """
@@ -116,3 +157,15 @@ def create_features(adj,num_nodes, edge_index = None):
 def compute_MAE(adj_matrices, num_nodes_batched, features_true):
     features_pred = torch.stack(list(map(lambda x: create_features(*x), zip(adj_matrices, num_nodes_batched))))
     return (features_true - features_pred).abs().mean()
+
+
+def features_diff(adj_matrices, num_nodes_batched):
+
+    nb_nodes = get_num_nodes_diff_batched(adj_matrices)
+    nb_edges = get_nb_edges_batched(adj_matrices)
+    degree_avr = get_mean_degree(adj_matrices, num_nodes_batched)
+    nb_triangles = get_num_triangle_batched(adj_matrices)
+    g_cluster_coef = get_g_cluster_coef_batched(adj_matrices, nb_triangles)
+    features_pred = torch.stack([nb_nodes,nb_edges,degree_avr,nb_triangles,g_cluster_coef]).T
+    return features_pred
+
