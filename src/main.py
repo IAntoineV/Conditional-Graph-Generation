@@ -226,9 +226,9 @@ if args.train_autoencoder:
                 loss, infos = autoencoder.metrics(data, data_aug, beta=args.beta_vae,
                                                                      gamma=args.gamma_vae)
 
-                train_loss_all_recon += infos["recon"].item()
-                train_loss_all_kld += infos["kld"].item()
-                train_loss_all_infonce += infos["infonce"].item()
+                val_loss_all_recon += infos["recon"].item()
+                val_loss_all_kld += infos["kld"].item()
+                val_loss_all_infonce += infos["infonce"].item()
                 val_loss_all += loss.item()
                 val_mae += infos["mae"]
                 cnt_val += 1
