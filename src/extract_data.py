@@ -2,7 +2,7 @@
 import torch
 import networkx as nx
 from community import best_partition
-from graph_utils import dense_to_edge_index, edge_index_to_dense
+from graph_utils import dense_to_edge_index
 STATS = ["node", "edge", "degre", "triangles", "g_cluster_coef", "max_k_core", "communities"]
 
 
@@ -155,6 +155,7 @@ def create_features(adj,num_nodes, edge_index = None):
 
 
 def compute_MAE(adj_matrices, num_nodes_batched, features_true):
+    adj_matrices = [adj[adj.sum(dim=1) != 0][:, adj.sum(dim=0) != 0] for adj in adj_matrices]
     features_pred = torch.stack(list(map(lambda x: create_features(*x), zip(adj_matrices, num_nodes_batched))))
     return (features_true - features_pred).abs().mean()
 

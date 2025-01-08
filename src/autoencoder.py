@@ -3,15 +3,18 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from torch_geometric.nn import GINConv, GATConv
-from torch_geometric.nn import global_add_pool
+from torch_geometric.nn import global_add_pool, global_mean_pool, global_max_pool
+from extract_data import compute_MAE
 
 
 # Decoder
 class Decoder(nn.Module):
-    def __init__(self, latent_dim, hidden_dim, n_layers, n_nodes):
+    def __init__(self, latent_dim, hidden_dim, n_layers, n_nodes, tau=1):
         super(Decoder, self).__init__()
         self.n_layers = n_layers
         self.n_nodes = n_nodes
+        self.tau = tau
+        print(f"Using {self.tau} as a value for tau in the Decoder")
 
         mlp_layers = [nn.Linear(latent_dim, hidden_dim)] + [nn.Linear(hidden_dim, hidden_dim) for i in
                                                             range(n_layers - 2)]
@@ -27,7 +30,7 @@ class Decoder(nn.Module):
 
         x = self.mlp[self.n_layers - 1](x)
         x = torch.reshape(x, (x.size(0), -1, 2))
-        x = F.gumbel_softmax(x, tau=1, hard=True)[:, :, 0]
+        x = F.gumbel_softmax(x, tau=self.tau, hard=True)[:, :, 0]
 
         adj = torch.zeros(x.size(0), self.n_nodes, self.n_nodes, device=x.device)
         idx = torch.triu_indices(self.n_nodes, self.n_nodes, 1)
@@ -131,7 +134,7 @@ class VariationalAutoEncoder(nn.Module):
 
 
 class GATEncoder(torch.nn.Module):
-    def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, heads=1, dropout=0.2):
+    def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, heads=1, dropout=0.2, use_pooling="add"):
         super().__init__()
         self.dropout = dropout
 
@@ -159,6 +162,8 @@ class GATEncoder(torch.nn.Module):
 
         self.bn = nn.BatchNorm1d(hidden_dim)
         self.fc = nn.Linear(hidden_dim, latent_dim)
+        self.use_pooling = use_pooling
+        print(f"Using pooling {self.use_pooling}")
 
     def forward(self, data):
         edge_index = data.edge_index
@@ -169,7 +174,14 @@ class GATEncoder(torch.nn.Module):
             x = F.elu(x)
             x = F.dropout(x, self.dropout, training=self.training)
 
-        out = global_add_pool(x, data.batch)
+        if self.use_pooling == "add":
+            out = global_add_pool(x, data.batch)
+        elif self.use_pooling == "max":
+            out = global_max_pool(x, data.batch)
+        elif self.use_pooling == "mean":
+            out = global_mean_pool(x, data.batch)
+        else:
+            raise ValueError(f"{self.use_pooling} pooling is not supported")
         out = self.bn(out)
         out = self.fc(out)
         return out
@@ -177,19 +189,21 @@ class GATEncoder(torch.nn.Module):
 
 class VariationalAutoEncoderWithInfoNCE(nn.Module):
     def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes,
-                 use_gat=False):
+                 use_gat=False, tau=1, use_pooling="add"):
         super(VariationalAutoEncoderWithInfoNCE, self).__init__()
         print("Training VariationalAutoEncoderWithInfoNCE")
         self.n_max_nodes = n_max_nodes
         self.input_dim = input_dim
+        self.tau = tau
         if use_gat:
             print("Using GAT_Encoder")
-            self.encoder = GATEncoder(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc, heads=2, dropout=0.2)
+            self.encoder = GATEncoder(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc, heads=2, dropout=0.2,
+                                      use_pooling=use_pooling)
         else:
             self.encoder = GIN(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc)
         self.fc_mu = nn.Linear(hidden_dim_enc, latent_dim)
         self.fc_logvar = nn.Linear(hidden_dim_enc, latent_dim)
-        self.decoder = Decoder(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes)
+        self.decoder = Decoder(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes, tau=self.tau)
 
         # Projection head for InfoNCE loss
         self.projection = nn.Sequential(
@@ -262,6 +276,35 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
     def get_beta(self, epoch, max_epochs, beta_max=0.05):
         return min(epoch / (max_epochs * 0.2), 1.0) * beta_max
 
+    def metrics(self, data, data_aug, beta=0.05, gamma=0.005):
+        x_g = self.encoder(data)
+        mu = self.fc_mu(x_g)
+        logvar = self.fc_logvar(x_g)
+        z = self.reparameterize(mu, logvar)
+        adj = self.decoder(z)
+
+        mae = compute_MAE(adj.detach().cpu(), (adj.sum(dim=2) >= 1).sum(dim=-1).detach().cpu(),
+                          data.stats.detach().cpu())
+
+        # Augmented data encodings
+        x_g_aug = self.encoder(data_aug)
+        mu_aug = self.fc_mu(x_g_aug)
+        logvar_aug = self.fc_logvar(x_g_aug)
+        z_aug = self.reparameterize(mu_aug, logvar_aug)
+
+        # Original VAE losses
+        # recon = F.l1_loss(adj, data.A, reduction='mean') +  F.binary_cross_entropy(adj, data.A, reduction='mean')
+        recon = F.mse_loss(adj, data.A, reduction='mean')
+        kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+
+        # InfoNCE loss
+        infonce = self.infonce_loss(z, z_aug)
+
+        # Combined loss
+        loss = recon + beta * kld + gamma * infonce
+
+        return loss, recon, kld, infonce, mae
+
     def loss_function(self, data, data_aug, beta=0.05, gamma=0.005):
         # Original VAE encodings
         x_g = self.encoder(data)
@@ -288,3 +331,4 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
         loss = recon + beta * kld + gamma * infonce
 
         return loss, recon, kld, infonce
+

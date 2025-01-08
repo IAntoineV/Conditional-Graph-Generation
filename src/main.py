@@ -1,22 +1,13 @@
 import argparse
-import os
-import random
-import scipy as sp
-import pickle
 
-import shutil
 import csv
-import ast
 
-import scipy.sparse as sparse
 from tqdm import tqdm
-from torch import Tensor
-import networkx as nx
+
 import numpy as np
 from datetime import datetime
 import torch
-import torch.nn as nn
-from torch_geometric.data import Data
+
 
 import torch.nn.functional as F
 from torch_geometric.loader import DataLoader
@@ -25,8 +16,8 @@ from autoencoder import VariationalAutoEncoder, VariationalAutoEncoderWithInfoNC
 from denoise_model import DenoiseNN, p_losses, sample
 from utils import linear_beta_schedule, construct_nx_from_adj, preprocess_dataset, subgraph_augment, edge_drop, \
     preprocess_dataset_with_pretrained_embedder
+from extract_data import compute_MAE
 
-from torch.utils.data import Subset
 
 np.random.seed(13)
 
@@ -144,6 +135,12 @@ parser.add_argument('--use-denoiser-onecyclelr', action='store_true', default=Fa
 # Weight decay denoiser AdamW
 parser.add_argument('--denoiser-weight-decay', type=float, default=None, help="Weight decay for AdamW")
 
+# Tau argument for decoder gumbel_softmax
+parser.add_argument('--tau', type=float, default=1.0, help="tau argument for gumbel_softmax in Decoder")
+
+# Type of global pooling for encoder
+parser.add_argument('--use-pooling', type=str, default="add", help="Type of pooling to us in encoder")
+
 args = parser.parse_args()
 
 print(f"{args=}")
@@ -169,8 +166,8 @@ test_loader = DataLoader(testset, batch_size=args.batch_size, shuffle=False)
 if args.train_infonce:
     autoencoder = VariationalAutoEncoderWithInfoNCE(args.spectral_emb_dim + 1, args.hidden_dim_encoder,
                                                     args.hidden_dim_decoder, args.latent_dim, args.n_layers_encoder,
-                                                    args.n_layers_decoder, args.n_max_nodes, use_gat=args.use_gat).to(
-        device)
+                                                    args.n_layers_decoder, args.n_max_nodes, use_gat=args.use_gat,
+                                                    tau=args.tau, use_pooling=args.use_pooling).to(device)
 else:
     autoencoder = VariationalAutoEncoder(args.spectral_emb_dim + 1, args.hidden_dim_encoder, args.hidden_dim_decoder,
                                          args.latent_dim, args.n_layers_encoder, args.n_layers_decoder,
@@ -223,6 +220,7 @@ if args.train_autoencoder:
             val_loss_all_recon = 0
             val_loss_all_kld = 0
             val_loss_all_infonce = 0
+            val_mae = 0
 
             with torch.no_grad():
                 for data in val_loader:
@@ -231,13 +229,14 @@ if args.train_autoencoder:
                     data_aug = edge_drop(data)
                     data_aug = data_aug.to(device)
 
-                    loss, recon, kld, infonce = autoencoder.loss_function(data, data_aug, beta=args.beta_vae,
-                                                                          gamma=args.gamma_vae)
+                    loss, recon, kld, infonce, mae = autoencoder.metrics(data, data_aug, beta=args.beta_vae,
+                                                                         gamma=args.gamma_vae)
 
                     val_loss_all_recon += recon.item()
                     val_loss_all_kld += kld.item()
                     val_loss_all_infonce += infonce.item()
                     val_loss_all += loss.item()
+                    val_mae += mae
                     cnt_val += 1
                     val_count += torch.max(data.batch) + 1
 
@@ -251,7 +250,8 @@ if args.train_autoencoder:
                       f'Val Loss: {val_loss_all / cnt_val:.5f}, '
                       f'Val Recon: {val_loss_all_recon / cnt_val:.2f}, '
                       f'Val KLD: {val_loss_all_kld / cnt_val:.2f}, '
-                      f'Val InfoNCE: {val_loss_all_infonce / cnt_val:.2f}')
+                      f'Val InfoNCE: {val_loss_all_infonce / cnt_val:.2f}, '
+                      f'Val MAE : {val_mae / cnt_val:.2f}')
 
             scheduler.step()
 
@@ -348,7 +348,8 @@ posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
 denoise_model = DenoiseNN(input_dim=args.latent_dim, hidden_dim=args.hidden_dim_denoise, n_layers=args.n_layers_denoise,
                           n_cond=args.n_condition, d_cond=args.dim_condition).to(device)
 if args.denoiser_weight_decay is not None:
-    optimizer = torch.optim.Adam(denoise_model.parameters(), lr=args.lr, weight_decay=args.denoiser_weight_decay)
+    print("Using weight decay {args.denoiser_weight_decay} and AdamW")
+    optimizer = torch.optim.AdamW(denoise_model.parameters(), lr=args.lr, weight_decay=args.denoiser_weight_decay)
 else:
     optimizer = torch.optim.Adam(denoise_model.parameters(), lr=args.lr)
 if args.use_denoiser_onecyclelr:
@@ -380,6 +381,59 @@ if args.train_denoiser:
         denoise_model.eval()
         val_loss_all = 0
         val_count = 0
+        val_mae_feats = 0
+        with torch.no_grad():
+            for data in val_loader:
+                data = data.to(device)
+                x_g = autoencoder.encode(data)
+                t = torch.randint(0, args.timesteps, (x_g.size(0),), device=device).long()
+                loss = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod,
+                                loss_type="huber")
+                val_loss_all += x_g.size(0) * loss.item()
+                val_count += x_g.size(0)
+
+                # compute MAE
+                stat = data.stats
+                bs = stat.size(0)
+                samples = sample(denoise_model, data.stats, latent_dim=args.latent_dim, timesteps=args.timesteps,
+                                 betas=betas, batch_size=bs)
+                x_sample = samples[-1]
+                adj = autoencoder.decode_mu(x_sample)
+                val_mae_feats += compute_MAE(adj.detach().cpu(), (adj.sum(dim=2) >= 1).sum(dim=-1).detach().cpu(),
+                                             stat.detach().cpu())
+
+        dt_t = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        print('{} Epoch: {:04d}, Train Loss: {:.5f}, Val Loss: {:.5f}, Val MAE '.format(dt_t, epoch,
+                                                                                        train_loss_all / train_count,
+                                                                                        val_loss_all / val_count,
+                                                                                        val_mae_feats / val_count))
+
+        scheduler.step()
+
+        if best_val_loss >= val_mae_feats:
+            best_val_loss = val_mae_feats
+            torch.save({
+                'state_dict': denoise_model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+            }, f'models/{date}_denoise_model.pth.tar')
+    print(f"Best Val Loss denoising : {best_val_loss / val_count}")
+    print("Taking last denoising model")
+    # print("Taking best denoiser to generate test data")
+    # checkpoint = torch.load(f'models/{date}_denoise_model.pth.tar')
+    # denoise_model.load_state_dict(checkpoint['state_dict'])
+else:
+    date_denoiser_to_load = "2025_01_04_14_34_17"
+    print(f"Loading denoiser from {date_denoiser_to_load}")
+    checkpoint = torch.load(f'models/{date_denoiser_to_load}_denoise_model.pth.tar')
+    denoise_model.load_state_dict(checkpoint['state_dict'])
+
+    print("Computing denoising val loss with selected autoencoder and denoiser")
+    autoencoder.eval()
+    denoise_model.eval()
+    with torch.no_grad():
+        val_loss_all = 0
+        val_count = 0
+        mae_feats = 0
         for data in val_loader:
             data = data.to(device)
             x_g = autoencoder.encode(data)
@@ -389,41 +443,19 @@ if args.train_denoiser:
             val_loss_all += x_g.size(0) * loss.item()
             val_count += x_g.size(0)
 
-        dt_t = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-        print('{} Epoch: {:04d}, Train Loss: {:.5f}, Val Loss: {:.5f}'.format(dt_t, epoch, train_loss_all / train_count,
-                                                                              val_loss_all / val_count))
+            stat = data.stats
+            bs = stat.size(0)
 
-        scheduler.step()
+            samples = sample(denoise_model, data.stats, latent_dim=args.latent_dim, timesteps=args.timesteps,
+                             betas=betas, batch_size=bs)
+            x_sample = samples[-1]
+            adj = autoencoder.decode_mu(x_sample)
+            mae_feats += compute_MAE(adj.detach().cpu(), (adj.sum(dim=2) >= 1).sum(dim=-1).detach().cpu(),
+                                     stat.detach().cpu())
 
-        if best_val_loss >= val_loss_all:
-            best_val_loss = val_loss_all
-            torch.save({
-                'state_dict': denoise_model.state_dict(),
-                'optimizer': optimizer.state_dict(),
-            }, f'models/{date}_denoise_model.pth.tar')
-    print(f"Best Val Loss denoising : {best_val_loss / val_count}")
-    print("Taking best denoiser to generate test data")
-    checkpoint = torch.load(f'models/{date}_denoise_model.pth.tar')
-    denoise_model.load_state_dict(checkpoint['state_dict'])
-else:
-    date_denoiser_to_load = "2025_01_04_11_25_27"
-    print(f"Loading denoiser from {date_denoiser_to_load}")
-    checkpoint = torch.load(f'models/{date_denoiser_to_load}_denoise_model.pth.tar')
-    denoise_model.load_state_dict(checkpoint['state_dict'])
-
-    print("Computing denoising val loss with selected autoencoder and denoiser")
-    denoise_model.eval()
-    val_loss_all = 0
-    val_count = 0
-    for data in val_loader:
-        data = data.to(device)
-        x_g = autoencoder.encode(data)
-        t = torch.randint(0, args.timesteps, (x_g.size(0),), device=device).long()
-        loss = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod,
-                        loss_type="huber")
-        val_loss_all += x_g.size(0) * loss.item()
-        val_count += x_g.size(0)
     print('Val Loss: {:.5f}'.format(val_loss_all / val_count))
+
+    print(f"MAE feats sur  val : {mae_feats / val_count}")
 
 denoise_model.eval()
 
@@ -449,11 +481,8 @@ with open(f"outputs/{date}_output.csv", "w", newline="") as csvfile:
         stat_d = torch.reshape(stat, (-1, args.n_condition))
 
         for i in range(stat.size(0)):
-            stat_x = stat_d[i]
 
             Gs_generated = construct_nx_from_adj(adj[i, :, :].detach().cpu().numpy())
-            stat_x = stat_x.detach().cpu().numpy()
-
             # Define a graph ID
             graph_id = graph_ids[i]
 
