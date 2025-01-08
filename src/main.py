@@ -233,9 +233,9 @@ if args.train_autoencoder:
                 loss, infos = autoencoder.loss_with_mse_reg(data, data_aug, beta=args.beta_vae,
                                                                      gamma=args.gamma_vae, lbd_reg=args.lbd_reg)
 
-                train_loss_all_recon += infos["recon"].item()
-                train_loss_all_kld += infos["kld"].item()
-                train_loss_all_infonce += infos["infonce"].item()
+                val_loss_all_recon += infos["recon"].item()
+                val_loss_all_kld += infos["kld"].item()
+                val_loss_all_infonce += infos["infonce"].item()
                 val_loss_all_feats += infos["mse_features"].item()
                 val_loss_all += loss.item()
                 val_mae += infos["mae"]
