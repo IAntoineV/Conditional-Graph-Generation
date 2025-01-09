@@ -16,6 +16,7 @@ from grakel.kernels import WeisfeilerLehman, VertexHistogram
 from tqdm import tqdm
 import scipy.sparse as sparse
 from torch_geometric.data import Data
+from torch_geometric.utils import subgraph
 
 from extract_feats import extract_feats, extract_numbers, extract_feats_using_model
 from extract_data import features_diff
@@ -236,6 +237,21 @@ def edge_drop(graph, p=0.1):
     edge_mask = torch.rand(graph.num_edges) > p
     return graph.edge_subgraph(edge_mask)
 
+
+
+def augment_graph(graph, p_edges=0.1, p_nodes=0.1):
+    # Ensure tensors are on the same device
+    device = graph.edge_index.device
+    
+    # Drop edges
+    edge_mask = torch.rand(graph.num_edges, device=device) > p_edges
+    edge_subgraph = graph.edge_subgraph(edge_mask)
+    
+    # Drop nodes
+    node_mask = torch.rand(edge_subgraph.num_nodes, device=device) > p_nodes
+    node_subgraph = edge_subgraph.subgraph(node_mask)
+    
+    return node_subgraph
 
 def preprocess_dataset_with_pretrained_embedder(dataset, n_max_nodes, spectral_emb_dim):
     data_lst = []

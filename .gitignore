@@ -1,0 +1,6 @@
+src/data/*
+*log.logs
+*.pyc
+altegrad_env/*
+src/models/*.pth.tar
+src/outputs/*.csv
