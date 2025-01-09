@@ -357,18 +357,31 @@ def preprocess_dataset_with_pretrained_embedder(dataset, n_max_nodes, spectral_e
             print(f'Dataset {filename} saved')
     return data_lst
 
+class Scaler:
+    def __init__(self, sigma):
+        self.sigma = sigma
+    def __call__(self, x, device=None):
+        if device is not None:
+            self.set_device(device)
+        return x/ self.sigma
+    def set_device(self, device):
+        self.sigma = self.sigma.to(device)
+        pass
 
+MU_STATS = torch.Tensor([[3.0606e+01, 2.2626e+02, 1.2925e+01, 1.3899e+03, 5.0697e-01]])
+SIGMA_STATS = torch.Tensor([1.1808e+01, 2.3441e+02, 1.0175e+01, 2.7951e+03, 3.2121e-01])
+SCALER_STATS = Scaler(SIGMA_STATS)
 def MSE_reconstruction_loss(adj_matrices, num_nodes_batched, features_true):
     features_true_projected = features_true[:,:5]
     features_pred=features_diff(adj_matrices, num_nodes_batched)
-    nb = features_pred.shape[0]
-    return ((features_pred - features_true_projected)**2).sum(dim=1).sqrt().mean() / nb
+    delta_normalized =  SCALER_STATS(features_pred - features_true_projected, device=adj_matrices.device)
+    return (delta_normalized**2).sum(dim=-1).sqrt().mean()
 
 
-def MAE_reconstruction_loss(adj_matrices, num_nodes_batched, features_true):
+def MAE_reconstruction_loss(adj_matrices, num_nodes_batched, features_true, device=None):
     features_true_projected = features_true[:, :5]
     features_pred = features_diff(adj_matrices, num_nodes_batched)
-
-    return (features_pred - features_true_projected).abs().mean()
+    delta_normalized = SCALER_STATS(features_pred - features_true_projected, device=adj_matrices.device)
+    return delta_normalized.abs().sum(dim=-1).mean()
 
 

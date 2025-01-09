@@ -164,7 +164,7 @@ def features_diff(adj_matrices, num_nodes_batched):
 
     nb_nodes = get_num_nodes_diff_batched(adj_matrices)
     nb_edges = get_nb_edges_batched(adj_matrices)
-    degree_avr = get_mean_degree(adj_matrices, num_nodes_batched)
+    degree_avr = get_mean_degree_batched(adj_matrices, num_nodes_batched)
     nb_triangles = get_num_triangle_batched(adj_matrices)
     g_cluster_coef = get_g_cluster_coef_batched(adj_matrices, nb_triangles)
     features_pred = torch.stack([nb_nodes,nb_edges,degree_avr,nb_triangles,g_cluster_coef]).T
