@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 from torch_geometric.nn import GINConv, GATConv
 from torch_geometric.nn import global_add_pool, global_mean_pool, global_max_pool
-from extract_data import compute_MAE
+from utils import compute_MAE
 from utils import MSE_reconstruction_loss, MAE_reconstruction_loss
 from graph_utils import get_num_nodes
 

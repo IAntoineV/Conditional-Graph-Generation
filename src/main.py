@@ -14,9 +14,10 @@ from torch_geometric.loader import DataLoader
 
 from autoencoder import VariationalAutoEncoder, VariationalAutoEncoderWithInfoNCE
 from denoise_model import DenoiseNN, p_losses, sample
+from src.denoise_model import p_losses_with_features_reg
 from utils import linear_beta_schedule, construct_nx_from_adj, preprocess_dataset, subgraph_augment, edge_drop, \
     preprocess_dataset_with_pretrained_embedder
-from extract_data import compute_MAE
+from utils import compute_MAE
 
 
 np.random.seed(13)
@@ -37,11 +38,11 @@ parser = argparse.ArgumentParser(description='NeuralGraphGenerator')
 parser = argparse.ArgumentParser(description='Configuration for the NeuralGraphGenerator model')
 
 # Learning rate for the optimizer
-parser.add_argument('--lr', type=float, default=1e-3,
+parser.add_argument('--lr', type=float, default=5e-3,
                     help="Learning rate for the optimizer, typically a small float value (default: 0.001)")
 
 # Dropout rate
-parser.add_argument('--dropout', type=float, default=0.0,
+parser.add_argument('--dropout', type=float, default=0.2,
                     help="Dropout rate (fraction of nodes to drop) to prevent overfitting (default: 0.0)")
 
 # Batch size for training
@@ -53,7 +54,7 @@ parser.add_argument('--epochs-autoencoder', type=int, default=200,
                     help="Number of training epochs for the autoencoder (default: 200)")
 
 # Training with InfoNCE loss
-parser.add_argument('--train-infonce', action='store_true', default=False,
+parser.add_argument('--train-infonce', action='store_true', default=True,
                     help="Flag to enable/disable the training of the VAE with constrastive InfoNCE loss (default: denabled)")
 
 # Hidden dimension size for the encoder network
@@ -73,7 +74,7 @@ parser.add_argument('--n-max-nodes', type=int, default=50,
                     help="Possible maximum number of nodes in graphs (default: 50)")
 
 # Number of layers in the encoder network
-parser.add_argument('--n-layers-encoder', type=int, default=2,
+parser.add_argument('--n-layers-encoder', type=int, default=8,
                     help="Number of layers in the encoder network (default: 2)")
 
 # Number of layers in the decoder network
@@ -89,7 +90,7 @@ parser.add_argument('--epochs-denoise', type=int, default=100,
                     help="Number of training epochs for the denoising model (default: 100)")
 
 # Number of timesteps in the diffusion
-parser.add_argument('--timesteps', type=int, default=500, help="Number of timesteps for the diffusion (default: 500)")
+parser.add_argument('--timesteps', type=int, default=700, help="Number of timesteps for the diffusion (default: 500)")
 
 # Hidden dimension size for the denoising model
 parser.add_argument('--hidden-dim-denoise', type=int, default=512,
@@ -143,7 +144,7 @@ parser.add_argument('--use-pooling', type=str, default="add", help="Type of pool
 
 
 # coef for
-parser.add_argument('--lbd-reg', type=float, default=4e-3, help="coefficient scaling the feature loss")
+parser.add_argument('--lbd-reg', type=float, default=1e-2, help="coefficient scaling the feature loss")
 
 args = parser.parse_args()
 
@@ -320,8 +321,9 @@ if args.train_denoiser:
             optimizer.zero_grad()
             x_g = autoencoder.encode(data)
             t = torch.randint(0, args.timesteps, (x_g.size(0),), device=device).long()
-            loss,infos = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod,
-                            loss_type="huber")
+            loss,infos = p_losses_with_features_reg(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod,
+                                                    sqrt_one_minus_alphas_cumprod, autoencoder.decoder, data.stats,
+                            loss_type="huber", lbd_reg=args.lbd_reg)
             loss.backward()
             train_loss_all += x_g.size(0) * loss.item()
             train_count += x_g.size(0)
