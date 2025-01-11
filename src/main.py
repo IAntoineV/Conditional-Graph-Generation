@@ -1,6 +1,7 @@
 import argparse
 
 import csv
+import os.path
 
 from tqdm import tqdm
 
@@ -15,12 +16,13 @@ from torch_geometric.utils import degree
 
 from autoencoder import VariationalAutoEncoder, VariationalAutoEncoderWithInfoNCE
 from denoise_model import DenoiseNN, p_losses, sample
-from src.denoise_model import p_losses_with_features_reg
+from denoise_model import p_losses_with_features_reg
 from utils import linear_beta_schedule, construct_nx_from_adj, preprocess_dataset, subgraph_augment, edge_drop, \
     preprocess_dataset_with_pretrained_embedder, augment_graph
-from utils import compute_MAE
+from utils import compute_MAE, compute_normal_MAE, compute_normal_MSE
 
-
+from graph_utils import get_num_nodes
+from extract_data import create_features
 
 np.random.seed(13)
 
@@ -48,7 +50,7 @@ parser.add_argument('--dropout', type=float, default=0.2,
                     help="Dropout rate (fraction of nodes to drop) to prevent overfitting (default: 0.0)")
 
 # Batch size for training
-parser.add_argument('--batch-size', type=int, default=256,
+parser.add_argument('--batch-size', type=int, default=512,
                     help="Batch size for training, controlling the number of samples per gradient update (default: 256)")
 
 # Number of epochs for the autoencoder training
@@ -148,12 +150,15 @@ parser.add_argument('--tau', type=float, default=1.0, help="tau argument for gum
 parser.add_argument('--use-pooling', type=str, default="add", help="Type of pooling to us in encoder")
 
 # coef for
-parser.add_argument('--lbd-reg', type=float, default=1e-2, help="coefficient scaling the feature loss")
+parser.add_argument('--lbd-reg', type=float, default=2e-2, help="coefficient scaling the feature loss")
 
 
+
+logs = ""
+logs += f" Arguments used : \n"
 args = parser.parse_args()
-
-print(f"{args=}")
+for key,val in vars(args).items():
+    logs+= f"{key} : {val}\n"
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 if args.use_text_embedding:
@@ -166,6 +171,8 @@ validset = preprocess_function("valid", args.n_max_nodes, args.spectral_emb_dim)
 testset = preprocess_function("test", args.n_max_nodes, args.spectral_emb_dim)
 
 date = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+
+logs += f"\n\n Date : {date} \n\n"
 print(f"Using date {date} for saving models and files")
 # initialize data loaders
 train_loader = DataLoader(trainset, batch_size=args.batch_size, shuffle=True)
@@ -201,6 +208,11 @@ optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.lr)
 scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr, epochs=args.epochs_autoencoder,
                                                 steps_per_epoch=len(train_loader), pct_start=0.1, final_div_factor=100)
 
+
+
+best_log_training_ae = {}
+logs_training_ae = {}
+logs += "\n\n Autoencoder training: \n"
 # Train VGAE model
 if args.train_autoencoder:
     best_val_loss = np.inf
@@ -268,18 +280,21 @@ if args.train_autoencoder:
 
         if epoch % 1 == 0:
             dt_t = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-            print(f'{dt_t} Epoch: {epoch:04d}, '
-                  f'Train Loss: {train_loss_all / cnt_train:.5f}, '
-                  f'Train Recon: {train_loss_all_recon / cnt_train:.2f}, '
-                  f'Train KLD: {train_loss_all_kld / cnt_train:.2f}, '
-                  f'Train InfoNCE: {train_loss_all_infonce / cnt_train:.2f}, '
-                  f'Train MSE Features : {train_loss_all_feats / cnt_train:.2f}, '
-                  f'Val Loss: {val_loss_all / cnt_val:.5f}, '
-                  f'Val Recon: {val_loss_all_recon / cnt_val:.2f}, '
-                  f'Val KLD: {val_loss_all_kld / cnt_val:.2f}, '
-                  f'Val InfoNCE: {val_loss_all_infonce / cnt_val:.2f}, '
-                  f'Val MAE : {val_mae / cnt_val:.2f}',
-                    f'Val MSE Features : {val_loss_all_feats / cnt_val:.2f}')
+            logs_training_ae = {
+                "Epoch": epoch,
+                "Train Loss": train_loss_all / cnt_train,
+                "Train Recon": train_loss_all_recon / cnt_train,
+                "Train KLD": train_loss_all_kld / cnt_train,
+                "Train InfoNCE": train_loss_all_infonce / cnt_train,
+                "Train MSE Features": train_loss_all_feats / cnt_train,
+                "Val Loss": val_loss_all / cnt_val,
+                "Val Recon": val_loss_all_recon / cnt_val,
+                "Val KLD": val_loss_all_kld / cnt_val,
+                "Val InfoNCE": val_loss_all_infonce / cnt_val,
+                "Val MAE": val_mae / cnt_val,
+                "Val MSE Features": val_loss_all_feats / cnt_val
+            }
+            print(f'{dt_t} {", ".join([f"{key} : {value:.4g}" for key,value in logs_training_ae.items()])}')
 
         scheduler.step()
 
@@ -289,8 +304,12 @@ if args.train_autoencoder:
                 'state_dict': autoencoder.state_dict(),
                 'optimizer': optimizer.state_dict(),
             }, f'models/{date}_autoencoder_infonce.pth.tar')
+            best_log_training_ae = logs_training_ae
     print("Taking best autoencoder to train denoiser")
     print(f"Loading autoencoder from {date}")
+    for key,value in best_log_training_ae.items():
+        logs+=f"\n{key} : {value:.4g}"
+
     checkpoint = torch.load(f'models/{date}_autoencoder_infonce.pth.tar')
     autoencoder.load_state_dict(checkpoint['state_dict'])
 else:
@@ -332,6 +351,10 @@ if args.use_denoiser_onecyclelr:
 else:
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.1)
 
+
+log_training_denoiser = {}
+best_log_training_denoiser = {}
+logs += "\n \n Diffusion : \n"
 # Train denoising model
 if args.train_denoiser:
     best_val_loss = np.inf
@@ -377,10 +400,8 @@ if args.train_denoiser:
                                              stat.detach().cpu())
 
         dt_t = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-        print('{} Epoch: {:04d}, Train Loss: {:.5f}, Val Loss: {:.5f}, Val MAE: {:.5f} '.format(dt_t, epoch,
-                                                                                        train_loss_all / train_count,
-                                                                                        val_loss_all / val_count,
-                                                                                        val_mae_feats / val_count))
+        log_training_denoiser = {"epoch": epoch, "Train Loss":train_loss_all / train_count, "val_loss" : val_loss_all / val_count, "val_mae" : val_mae_feats / val_count,}
+        print(f'{dt_t} {", ".join([f"{key} : {value:.4g}" for key,value in log_training_denoiser.items()])}')
 
         scheduler.step()
 
@@ -390,8 +411,11 @@ if args.train_denoiser:
                 'state_dict': denoise_model.state_dict(),
                 'optimizer': optimizer.state_dict(),
             }, f'models/{date}_denoise_model.pth.tar')
+            best_log_training_denoiser = log_training_denoiser
     print(f"Best Val Loss denoising : {best_val_loss / val_count}")
     print("Taking last denoising model")
+    for key,val in best_log_training_denoiser.items():
+        logs += f"\n {key} : {val:.4g} "
     # print("Taking best denoiser to generate test data")
     # checkpoint = torch.load(f'models/{date}_denoise_model.pth.tar')
     # denoise_model.load_state_dict(checkpoint['state_dict'])
@@ -440,23 +464,32 @@ with open(f"outputs/{date}_output.csv", "w", newline="") as csvfile:
     writer = csv.writer(csvfile)
     # Write the header
     writer.writerow(["graph_id", "edge_list"])
+    mae_generated_normalized = 0
+    mse_generated = 0
+    mae_generated =0
+    test_size = 0
+
     for k, data in enumerate(tqdm(test_loader, desc='Processing test set', )):
         data = data.to(device)
-
-        stat = data.stats
+        stat = data.stats.detach().cpu()
         bs = stat.size(0)
-
+        test_size+=bs
         graph_ids = data.filename
 
         samples = sample(denoise_model, data.stats, latent_dim=args.latent_dim, timesteps=args.timesteps, betas=betas,
                          batch_size=bs)
         x_sample = samples[-1]
-        adj = autoencoder.decode_mu(x_sample)
-        stat_d = torch.reshape(stat, (-1, args.n_condition))
+        adj = autoencoder.decode_mu(x_sample).detach().cpu()
+        stat_d = torch.reshape(stat, (-1, args.n_condition)).detach().cpu()
 
+        num_nodes = get_num_nodes(adj)
+        mae_generated += compute_normal_MAE(adj, num_nodes ,stat)
+        mse_generated +=  compute_normal_MSE(adj, num_nodes ,stat)
+        mae_generated_normalized += compute_MAE(adj, num_nodes, stat)
+        mae_per_component = torch.stack(list(map(lambda x: create_features(*x), zip(adj, num_nodes)))).abs().mean(dim=0)
         for i in range(stat.size(0)):
 
-            Gs_generated = construct_nx_from_adj(adj[i, :, :].detach().cpu().numpy())
+            Gs_generated = construct_nx_from_adj(adj[i, :, :].numpy())
             # Define a graph ID
             graph_id = graph_ids[i]
 
@@ -464,3 +497,17 @@ with open(f"outputs/{date}_output.csv", "w", newline="") as csvfile:
             edge_list_text = ", ".join([f"({u}, {v})" for u, v in Gs_generated.edges()])
             # Write the graph ID and the full edge list as a single row
             writer.writerow([graph_id, edge_list_text])
+    mae_generated_normalized = mae_generated_normalized / test_size
+    mse_generated = mse_generated / test_size
+    mae_generated = mae_generated / test_size
+    logs_inference = f"normalized MAE : {mae_generated_normalized:.3g} \n MAE : {mae_generated:.3g} \n MSE : {mse_generated:.3g} \n MAE per component {list(mae_per_component)}"
+
+stat = torch.concat([data.stats  for data in test_loader], dim=0)
+stat_mean= list(stat.mean(dim=0))
+stat_std = list(stat.std(dim=0))
+logs += f"\n\n Logs inference \n {logs_inference}"
+logs += f"\n Stats mean : {stat_mean} \n Stats std : {stat_std}"
+if not os.path.exists("./training_logs/"):
+    os.mkdir("./training_logs/")
+with open(f"./training_logs/{date}_report.txt", "w") as f:
+    f.write(logs)
