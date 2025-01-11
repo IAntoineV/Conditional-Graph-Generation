@@ -237,10 +237,11 @@ def edge_drop(graph, p=0.1):
     return graph.edge_subgraph(edge_mask)
 
 
+
 def preprocess_dataset_with_pretrained_embedder(dataset, n_max_nodes, spectral_emb_dim):
     data_lst = []
     if dataset == 'test':
-        filename = './data/st_embed_dataset_' + dataset + '.pt'
+        filename = './embedding_jina_full/jina_embed_dataset_' + dataset + '.pt'
         desc_file = './data/' + dataset + '/test.txt'
 
         if os.path.isfile(filename):
@@ -249,8 +250,8 @@ def preprocess_dataset_with_pretrained_embedder(dataset, n_max_nodes, spectral_e
             print(f'Dataset {filename} loaded from file')
 
         else:
-            from sentence_transformers import SentenceTransformer
-            model = SentenceTransformer('llm_model/all-MiniLM-L6-v2')
+            # from sentence_transformers import SentenceTransformer
+            # model = SentenceTransformer('llm_model/all-MiniLM-L6-v2')
             fr = open(desc_file, "r")
             for line in fr:
                 line = line.strip()
@@ -268,7 +269,7 @@ def preprocess_dataset_with_pretrained_embedder(dataset, n_max_nodes, spectral_e
 
 
     else:
-        filename = './data/st_embed_dataset_' + dataset + '.pt'
+        filename = './embedding_jina_full/jina_embed_dataset_' + dataset + '.pt'
         graph_path = './data/' + dataset + '/graph'
         desc_path = './data/' + dataset + '/description'
 

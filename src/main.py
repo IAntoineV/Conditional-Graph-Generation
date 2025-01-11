@@ -14,10 +14,8 @@ from torch_geometric.loader import DataLoader
 
 from autoencoder import VariationalAutoEncoder, VariationalAutoEncoderWithInfoNCE
 from denoise_model import DenoiseNN, p_losses, sample
-from src.denoise_model import p_losses_with_features_reg
 from utils import linear_beta_schedule, construct_nx_from_adj, preprocess_dataset, subgraph_augment, edge_drop, \
-    preprocess_dataset_with_pretrained_embedder
-from utils import compute_MAE
+    preprocess_dataset_with_pretrained_embedder, compute_MAE
 
 
 np.random.seed(13)
@@ -38,11 +36,11 @@ parser = argparse.ArgumentParser(description='NeuralGraphGenerator')
 parser = argparse.ArgumentParser(description='Configuration for the NeuralGraphGenerator model')
 
 # Learning rate for the optimizer
-parser.add_argument('--lr', type=float, default=5e-3,
+parser.add_argument('--lr', type=float, default=1e-3,
                     help="Learning rate for the optimizer, typically a small float value (default: 0.001)")
 
 # Dropout rate
-parser.add_argument('--dropout', type=float, default=0.2,
+parser.add_argument('--dropout', type=float, default=0.0,
                     help="Dropout rate (fraction of nodes to drop) to prevent overfitting (default: 0.0)")
 
 # Batch size for training
@@ -54,7 +52,7 @@ parser.add_argument('--epochs-autoencoder', type=int, default=200,
                     help="Number of training epochs for the autoencoder (default: 200)")
 
 # Training with InfoNCE loss
-parser.add_argument('--train-infonce', action='store_true', default=True,
+parser.add_argument('--train-infonce', action='store_true', default=False,
                     help="Flag to enable/disable the training of the VAE with constrastive InfoNCE loss (default: denabled)")
 
 # Hidden dimension size for the encoder network
@@ -74,7 +72,7 @@ parser.add_argument('--n-max-nodes', type=int, default=50,
                     help="Possible maximum number of nodes in graphs (default: 50)")
 
 # Number of layers in the encoder network
-parser.add_argument('--n-layers-encoder', type=int, default=8,
+parser.add_argument('--n-layers-encoder', type=int, default=2,
                     help="Number of layers in the encoder network (default: 2)")
 
 # Number of layers in the decoder network
@@ -90,7 +88,7 @@ parser.add_argument('--epochs-denoise', type=int, default=100,
                     help="Number of training epochs for the denoising model (default: 100)")
 
 # Number of timesteps in the diffusion
-parser.add_argument('--timesteps', type=int, default=700, help="Number of timesteps for the diffusion (default: 500)")
+parser.add_argument('--timesteps', type=int, default=500, help="Number of timesteps for the diffusion (default: 500)")
 
 # Hidden dimension size for the denoising model
 parser.add_argument('--hidden-dim-denoise', type=int, default=512,
@@ -142,9 +140,11 @@ parser.add_argument('--tau', type=float, default=1.0, help="tau argument for gum
 # Type of global pooling for encoder
 parser.add_argument('--use-pooling', type=str, default="add", help="Type of pooling to us in encoder")
 
+# Use and compute MAE
+parser.add_argument('--not-use-mae', action='store_true', default=False, help="Do not use MAE during training and val")
 
 # coef for
-parser.add_argument('--lbd-reg', type=float, default=1e-2, help="coefficient scaling the feature loss")
+parser.add_argument('--lbd-reg', type=float, default=4e-3, help="coefficient scaling the feature loss")
 
 args = parser.parse_args()
 
@@ -200,13 +200,18 @@ if args.train_autoencoder:
             optimizer.zero_grad()
             # beta = autoencoder.get_beta(epoch, max_epochs=args.epochs_autoencoder)
             # Updated loss function now returns InfoNCE loss as well
-            loss, infos= autoencoder.loss_with_mse_reg(data, data_aug, beta=args.beta_vae,
+            if args.not_use_mae:
+                loss, infos = autoencoder.loss_function(data, data_aug,beta=args.beta_vae, gamma=args.gamma_vae,)
+            else:
+                loss, infos= autoencoder.loss_with_mse_reg(data, data_aug, beta=args.beta_vae,
+            
                                                                   gamma=args.gamma_vae, lbd_reg=args.lbd_reg)
-
+                train_loss_all_feats += infos["mse_features"].item()
+            
             train_loss_all_recon += infos["recon"].item()
             train_loss_all_kld += infos["kld"].item()
             train_loss_all_infonce += infos["infonce"].item()
-            train_loss_all_feats += infos["mse_features"].item()
+        
             cnt_train += 1
 
             loss.backward()
@@ -231,15 +236,21 @@ if args.train_autoencoder:
                 data_aug = edge_drop(data)
                 data_aug = data_aug.to(device)
 
-                loss, infos = autoencoder.loss_with_mse_reg(data, data_aug, beta=args.beta_vae,
+                if args.not_use_mae:
+                    loss, infos  =autoencoder.loss_function(data, data_aug, beta=args.beta_vae,
+                                                                     gamma=args.gamma_vae)
+                else:
+                    loss, infos = autoencoder.loss_with_mse_reg(data, data_aug, beta=args.beta_vae,
                                                                      gamma=args.gamma_vae, lbd_reg=args.lbd_reg)
+                           
+                    val_loss_all_feats += infos["mse_features"].item()
+                    val_mae += infos["mae"]
 
                 val_loss_all_recon += infos["recon"].item()
                 val_loss_all_kld += infos["kld"].item()
                 val_loss_all_infonce += infos["infonce"].item()
-                val_loss_all_feats += infos["mse_features"].item()
                 val_loss_all += loss.item()
-                val_mae += infos["mae"]
+           
                 cnt_val += 1
                 val_count += torch.max(data.batch) + 1
 
@@ -309,6 +320,8 @@ if args.use_denoiser_onecyclelr:
 else:
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.1)
 
+if args.not_use_mae:
+    print("Warning. Won't use MAE during training. MAe won't be computed.")
 # Train denoising model
 if args.train_denoiser:
     best_val_loss = np.inf
@@ -321,9 +334,8 @@ if args.train_denoiser:
             optimizer.zero_grad()
             x_g = autoencoder.encode(data)
             t = torch.randint(0, args.timesteps, (x_g.size(0),), device=device).long()
-            loss,infos = p_losses_with_features_reg(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod,
-                                                    sqrt_one_minus_alphas_cumprod, autoencoder.decoder, data.stats,
-                            loss_type="huber", lbd_reg=args.lbd_reg)
+            loss,infos = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod,
+                            loss_type="huber")
             loss.backward()
             train_loss_all += x_g.size(0) * loss.item()
             train_count += x_g.size(0)
@@ -350,8 +362,9 @@ if args.train_denoiser:
                                  betas=betas, batch_size=bs)
                 x_sample = samples[-1]
                 adj = autoencoder.decode_mu(x_sample)
-                val_mae_feats += compute_MAE(adj.detach().cpu(), (adj.sum(dim=2) >= 1).sum(dim=-1).detach().cpu(),
-                                             stat.detach().cpu())
+                if not args.not_use_mae:
+                    val_mae_feats += compute_MAE(adj.detach().cpu(), (adj.sum(dim=2) >= 1).sum(dim=-1).detach().cpu(),
+                                                stat.detach().cpu())
 
         dt_t = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         print('{} Epoch: {:04d}, Train Loss: {:.5f}, Val Loss: {:.5f}, Val MAE: {:.5f} '.format(dt_t, epoch,
@@ -361,12 +374,21 @@ if args.train_denoiser:
 
         scheduler.step()
 
-        if best_val_loss >= val_mae_feats:
-            best_val_loss = val_mae_feats
-            torch.save({
-                'state_dict': denoise_model.state_dict(),
-                'optimizer': optimizer.state_dict(),
-            }, f'models/{date}_denoise_model.pth.tar')
+        if not args.not_use_mae:
+            if best_val_loss >= val_mae_feats:
+                best_val_loss = val_mae_feats
+                torch.save({
+                    'state_dict': denoise_model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                }, f'models/{date}_denoise_model.pth.tar')
+        else:
+            if best_val_loss >= val_loss_all:
+                best_val_loss = val_loss_all
+                torch.save({
+                    'state_dict': denoise_model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                }, f'models/{date}_denoise_model.pth.tar')
+
     print(f"Best Val Loss denoising : {best_val_loss / val_count}")
     print("Taking last denoising model")
     # print("Taking best denoiser to generate test data")
