@@ -2,11 +2,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from torch_geometric.nn import GINConv, GATConv
+from torch_geometric.nn import GINConv, GATConv, PNAConv
 from torch_geometric.nn import global_add_pool, global_mean_pool, global_max_pool
 from utils import compute_MAE
 from utils import MSE_reconstruction_loss, MAE_reconstruction_loss
 from graph_utils import get_num_nodes
+
 
 # Decoder
 class Decoder(nn.Module):
@@ -41,7 +42,7 @@ class Decoder(nn.Module):
 
 
 class GIN(torch.nn.Module):
-    def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, dropout=0.2):
+    def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, dropout=0.2, pool_type="add"):
         super().__init__()
         self.dropout = dropout
 
@@ -62,6 +63,15 @@ class GIN(torch.nn.Module):
 
         self.bn = nn.BatchNorm1d(hidden_dim)
         self.fc = nn.Linear(hidden_dim, latent_dim)
+        if pool_type=="mean":
+            print("mean")
+            self.global_pool = global_mean_pool
+        elif pool_type=="max":
+            print("max")
+            self.global_pool = global_max_pool
+        else:
+            print("add")
+            self.global_pool = global_add_pool
 
     def forward(self, data):
         edge_index = data.edge_index
@@ -71,19 +81,22 @@ class GIN(torch.nn.Module):
             x = conv(x, edge_index)
             x = F.dropout(x, self.dropout, training=self.training)
 
-        out = global_add_pool(x, data.batch)
+        out = self.global_pool(x, data.batch)
         out = self.bn(out)
         out = self.fc(out)
         return out
-
-
+    
 # Variational Autoencoder
 class VariationalAutoEncoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes):
+    def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes, use_pna=False, pool_type="add", aggregators=None, scalers=None, deg=None):
         super(VariationalAutoEncoder, self).__init__()
         self.n_max_nodes = n_max_nodes
         self.input_dim = input_dim
-        self.encoder = GIN(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc)
+        if use_pna:
+            print("Using PNA_Encoder")
+            self.encoder = PNAEncoder(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc, dropout=0.2, aggregators=aggregators, scalers=scalers, deg=deg)
+        else:
+            self.encoder = GIN(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc, pool_type=pool_type)
         self.fc_mu = nn.Linear(hidden_dim_enc, latent_dim)
         self.fc_logvar = nn.Linear(hidden_dim_enc, latent_dim)
         self.decoder = Decoder(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes)
@@ -166,6 +179,19 @@ class GATEncoder(torch.nn.Module):
         self.use_pooling = use_pooling
         print(f"Using pooling {self.use_pooling}")
 
+        if use_pooling=="mean":
+            print("mean")
+            self.global_pool = global_mean_pool
+        elif use_pooling=="max":
+            print("max")
+            self.global_pool = global_max_pool
+        elif use_pooling=="add":
+            print("add")
+            self.global_pool = global_add_pool
+        else:
+            raise ValueError(f"{self.use_pooling} pooling is not supported")
+
+
     def forward(self, data):
         edge_index = data.edge_index
         x = data.x
@@ -175,22 +201,55 @@ class GATEncoder(torch.nn.Module):
             x = F.elu(x)
             x = F.dropout(x, self.dropout, training=self.training)
 
-        if self.use_pooling == "add":
-            out = global_add_pool(x, data.batch)
-        elif self.use_pooling == "max":
-            out = global_max_pool(x, data.batch)
-        elif self.use_pooling == "mean":
-            out = global_mean_pool(x, data.batch)
-        else:
-            raise ValueError(f"{self.use_pooling} pooling is not supported")
+        out = self.global_pool(x, data.batch)
         out = self.bn(out)
         out = self.fc(out)
         return out
 
 
+class PNAEncoder(torch.nn.Module):
+    def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, dropout=0.2, aggregators=None, scalers=None, deg=None, pool_type="add"):
+        super().__init__()
+        self.dropout = dropout
+        
+        self.convs = nn.ModuleList()
+        self.convs.append(PNAConv(input_dim, hidden_dim, aggregators=aggregators, scalers=scalers, deg=deg))
+        for layer in range(n_layers - 1):
+            self.convs.append(PNAConv(hidden_dim, hidden_dim, aggregators=aggregators, scalers=scalers, deg=deg))
+
+        self.bn = nn.BatchNorm1d(hidden_dim)
+        self.fc = nn.Linear(hidden_dim, latent_dim)
+        self.relu = nn.ReLU()
+        
+        if pool_type=="mean":
+            print("mean")
+            self.global_pool = global_mean_pool
+        elif pool_type=="max":
+            print("max")
+            self.global_pool = global_max_pool
+        else:
+            print("add")
+            self.global_pool = global_add_pool
+
+
+    def forward(self, data):
+        edge_index = data.edge_index
+        x = data.x
+
+        for conv in self.convs:
+            x = self.relu(conv(x, edge_index))
+            x = F.dropout(x, self.dropout, training=self.training)
+
+        out = self.global_pool(x, data.batch)
+
+        out = self.bn(out)
+        out = self.fc(out)
+        return out
+    
+
 class VariationalAutoEncoderWithInfoNCE(nn.Module):
     def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes,
-                 use_gat=False, tau=1, use_pooling="add"):
+                 use_gat=False, use_pna=False, tau=1, use_pooling="add", aggregators=None, scalers=None, deg=None):
         super(VariationalAutoEncoderWithInfoNCE, self).__init__()
         print("Training VariationalAutoEncoderWithInfoNCE")
         self.n_max_nodes = n_max_nodes
@@ -198,8 +257,10 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
         self.tau = tau
         if use_gat:
             print("Using GAT_Encoder")
-            self.encoder = GATEncoder(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc, heads=2, dropout=0.2,
-                                      use_pooling=use_pooling)
+            self.encoder = GATEncoder(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc, heads=2, dropout=0.2, use_pooling=use_pooling)
+        elif use_pna:
+            print("Using PNA_Encoder")
+            self.encoder = PNAEncoder(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc, dropout=0.2, aggregators=aggregators, scalers=scalers, deg=deg)
         else:
             self.encoder = GIN(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc)
         self.fc_mu = nn.Linear(hidden_dim_enc, latent_dim)

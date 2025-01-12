@@ -11,11 +11,14 @@ import torch
 
 import torch.nn.functional as F
 from torch_geometric.loader import DataLoader
+from torch_geometric.utils import degree
 
 from autoencoder import VariationalAutoEncoder, VariationalAutoEncoderWithInfoNCE
 from denoise_model import DenoiseNN, p_losses, sample
 from utils import linear_beta_schedule, construct_nx_from_adj, preprocess_dataset, subgraph_augment, edge_drop, \
-    preprocess_dataset_with_pretrained_embedder, compute_MAE
+    preprocess_dataset_with_pretrained_embedder, augment_graph
+from utils import compute_MAE
+
 
 
 np.random.seed(13)
@@ -127,6 +130,9 @@ parser.add_argument('--use-text-embedding', action='store_true', default=False,
 # Flag to use GAT Layers in the encoder
 parser.add_argument('--use-gat', action='store_true', default=False, help="Flag to use GAT Layers in the encoder")
 
+# Flag to use Principal Neighbourhood Aggregation (PNA) in the encoder
+parser.add_argument('--use-pna', action='store_true', default=False, help="Flag to use PNA Convs in the encoder")
+
 # Flag to use OneCycleLR scheduler for denoiser
 parser.add_argument('--use-denoiser-onecyclelr', action='store_true', default=False,
                     help="Flag to use OneCycleLR scheduler for denoiser")
@@ -144,7 +150,8 @@ parser.add_argument('--use-pooling', type=str, default="add", help="Type of pool
 parser.add_argument('--not-use-mae', action='store_true', default=False, help="Do not use MAE during training and val")
 
 # coef for
-parser.add_argument('--lbd-reg', type=float, default=4e-3, help="coefficient scaling the feature loss")
+parser.add_argument('--lbd-reg', type=float, default=1e-2, help="coefficient scaling the feature loss")
+
 
 args = parser.parse_args()
 
@@ -168,10 +175,28 @@ val_loader = DataLoader(validset, batch_size=args.batch_size, shuffle=False)
 test_loader = DataLoader(testset, batch_size=args.batch_size, shuffle=False)
 
 # initialize VGAE model
+aggregators = ["mean", "min", "max", "std"]
+scalers = ["identity", "amplification", "attenuation"]
+deg=None
+if args.use_pna:
+    # from https://github.com/pyg-team/pytorch_geometric/blob/master/examples/pna.py
+    # Compute the maximum in-degree in the training data.
+    max_degree = -1
+    for data in trainset:
+        d = degree(data.edge_index[1], num_nodes=data.num_nodes, dtype=torch.long)
+        max_degree = max(max_degree, int(d.max()))
+
+    # Compute the in-degree histogram tensor
+    deg = torch.zeros(max_degree + 1, dtype=torch.long)
+    for data in trainset:
+        d = degree(data.edge_index[1], num_nodes=data.num_nodes, dtype=torch.long)
+        deg += torch.bincount(d, minlength=deg.numel())
+
 autoencoder = VariationalAutoEncoderWithInfoNCE(args.spectral_emb_dim + 1, args.hidden_dim_encoder,
                                                 args.hidden_dim_decoder, args.latent_dim, args.n_layers_encoder,
-                                                args.n_layers_decoder, args.n_max_nodes, use_gat=args.use_gat,
-                                                tau=args.tau, use_pooling=args.use_pooling).to(device)
+                                                args.n_layers_decoder, args.n_max_nodes, use_gat=args.use_gat, use_pna=args.use_pna,
+                                                tau=args.tau, use_pooling=args.use_pooling,
+                                                aggregators=aggregators, scalers=scalers, deg=deg).to(device)
 print("autoencoder:")
 print(autoencoder)
 optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.lr)
