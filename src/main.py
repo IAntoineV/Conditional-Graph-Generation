@@ -140,6 +140,14 @@ parser.add_argument('--use-pna', action='store_true', default=False, help="Flag 
 parser.add_argument('--use-denoiser-onecyclelr', action='store_true', default=False,
                     help="Flag to use OneCycleLR scheduler for denoiser")
 
+# Number of graph layers used in decoder
+parser.add_argument('--n-dec-graph-layers', type=int, default=1,
+                    help="Number of graph layers used in the decoder, if --use-decoder is in: ['gat']")
+
+# If using GATDecoder, number of heads used
+parser.add_argument('--n-dec-heads', type=int, default=1,
+                    help="Number of heads used in GATConvs of GATDecoder")
+
 # Weight decay denoiser AdamW
 parser.add_argument('--denoiser-weight-decay', type=float, default=None, help="Weight decay for AdamW")
 
@@ -218,7 +226,8 @@ autoencoder = VariationalAutoEncoderWithInfoNCE(args.spectral_emb_dim + 1, args.
                                                 args.hidden_dim_decoder, args.latent_dim, args.n_layers_encoder,
                                                 args.n_layers_decoder, args.n_max_nodes, use_gat=args.use_gat, use_pna=args.use_pna,
                                                 tau=args.tau, use_pooling=args.use_pooling,
-                                                aggregators=aggregators, scalers=scalers, deg=deg, use_decoder=args.use_decoder, stats_latent_size=args.stats_latent_size).to(device)
+                                                aggregators=aggregators, scalers=scalers, deg=deg, use_decoder=args.use_decoder, 
+                                                stats_latent_size=args.stats_latent_size, n_dec_graph_layers=args.n_dec_graph_layers, n_dec_heads=args.n_dec_heads).to(device)
 print("autoencoder:")
 print(autoencoder)
 optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.lr)

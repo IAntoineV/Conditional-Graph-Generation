@@ -80,6 +80,61 @@ class DecoderWithStats(nn.Module):
         return adj
 
 
+class GATDecoder(nn.Module):
+    def __init__(self, latent_dim, hidden_dim, n_layers, n_nodes, tau=1, n_graph_layers=1, heads=1, dropout=0.2):
+        super(GATDecoder, self).__init__()
+        self.n_layers = n_layers
+        self.n_nodes = n_nodes
+        self.tau = tau
+        self.graph_layers = n_graph_layers
+        self.heads = heads
+        self.dropout = dropout
+
+        self.mlp = nn.Sequential(
+            nn.Linear(latent_dim, hidden_dim),
+            nn.ReLU(),
+            *[nn.Sequential(nn.Linear(hidden_dim, hidden_dim), nn.ReLU()) for _ in range(n_layers - 2)],
+            nn.Linear(hidden_dim, n_nodes * hidden_dim)
+        )
+
+        self.gat_convs = nn.ModuleList()
+        for _ in range(n_graph_layers):
+            self.gat_convs.append(
+                GATConv(
+                    in_channels=hidden_dim,
+                    out_channels=hidden_dim // heads,
+                    heads=heads,
+                    concat=True,
+                    dropout=dropout
+                )
+            )
+
+        self.last_layer = nn.Linear(hidden_dim, n_nodes)
+
+    def forward(self, x):
+        batch_size = x.size(0)
+        x = self.mlp(x) #(batch_size, n_nodes * hidden_dim)
+        x = x.view(batch_size, self.n_nodes, -1)  # (batch_size, n_nodes, hidden_dim)
+
+        for i in range(self.graph_layers):
+            # Create edge index for a fully connected graph
+            edge_index = torch.combinations(torch.arange(self.n_nodes, device=x.device), r=2).t().contiguous()
+            batch_edge_index = torch.cat([edge_index + i * self.n_nodes for i in range(batch_size)], dim=1)
+
+            x_flat = x.view(-1, x.size(-1))  # (batch_size * n_nodes, hidden_dim)
+            x_flat = self.gat_convs[i](x_flat, batch_edge_index)
+            x_flat = F.elu(x_flat)
+            x_flat = F.dropout(x_flat, self.dropout, training=self.training)
+            x = x_flat.view(batch_size, self.n_nodes, -1)  # -> (batch_size, n_nodes, hidden_dim)
+
+        x = self.final_layer(x)  # (batch_size, n_nodes, n_nodes)
+
+        x = F.gumbel_softmax(x, tau=self.tau, hard=True, dim=-1)
+        adj = x + x.transpose(1, 2)
+        adj = torch.clamp(adj, 0, 1)
+        return adj
+    
+
 class GIN(torch.nn.Module):
     def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, dropout=0.2, pool_type="add"):
         super().__init__()
@@ -160,7 +215,7 @@ class SAGE(torch.nn.Module):
 
 # Variational Autoencoder
 class VariationalAutoEncoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes, use_pna=False, pool_type="add", aggregators=None, scalers=None, deg=None, use_decoder=None, stats_latent_size=64):
+    def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes, use_pna=False, pool_type="add", aggregators=None, scalers=None, deg=None, use_decoder=None, stats_latent_size=64, n_dec_heads=1, n_dec_graph_layers=1):
         super(VariationalAutoEncoder, self).__init__()
         self.n_max_nodes = n_max_nodes
         self.input_dim = input_dim
@@ -176,6 +231,10 @@ class VariationalAutoEncoder(nn.Module):
             self.decoder = Decoder(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes)
         elif use_decoder =="decoder_stats":
             self.decoder= DecoderWithStats(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes,stats_latent_size=stats_latent_size)
+        elif use_decoder == "gat":
+            self.decoder = GATDecoder(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes, tau=1, n_graph_layers=n_dec_graph_layers, heads=n_dec_heads)
+        else:
+            raise ValueError(f"{use_decoder} decoder is not supported")
 
     def forward(self, data):
         x_g = self.encoder(data)
@@ -331,7 +390,7 @@ class PNAEncoder(torch.nn.Module):
 
 class VariationalAutoEncoderWithInfoNCE(nn.Module):
     def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes,
-                 use_gat=False, use_pna=False, tau=1, use_pooling="add", aggregators=None, scalers=None, deg=None,use_decoder=None, stats_latent_size=64):
+                 use_gat=False, use_pna=False, tau=1, use_pooling="add", aggregators=None, scalers=None, deg=None,use_decoder=None, stats_latent_size=64, n_dec_graph_layers=1, n_dec_heads=1):
         super(VariationalAutoEncoderWithInfoNCE, self).__init__()
         print("Training VariationalAutoEncoderWithInfoNCE")
         self.n_max_nodes = n_max_nodes
@@ -347,12 +406,15 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
             self.encoder = GIN(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc)
         self.fc_mu = nn.Linear(hidden_dim_enc, latent_dim)
         self.fc_logvar = nn.Linear(hidden_dim_enc, latent_dim)
-        self.use_decoder= use_decoder
+        self.use_decoder = use_decoder
         if use_decoder is None:
             self.decoder = Decoder(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes, tau=self.tau)
         elif use_decoder =="decoder_stats":
             self.decoder= DecoderWithStats(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes,stats_latent_size=stats_latent_size)
-
+        elif use_decoder == "gat":
+            self.decoder = GATDecoder(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes, tau, n_graph_layers=n_dec_graph_layers, heads=n_dec_heads)
+        else:
+            raise ValueError(f"{use_decoder} decoder is not supported")
 
         # Projection head for InfoNCE loss
         self.projection = nn.Sequential(
