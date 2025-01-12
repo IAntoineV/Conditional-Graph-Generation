@@ -3,6 +3,7 @@ import torch
 import networkx as nx
 from community import best_partition
 from graph_utils import dense_to_edge_index
+import numpy as np
 STATS = ["node", "edge", "degre", "triangles", "g_cluster_coef", "max_k_core", "communities"]
 
 
@@ -43,6 +44,7 @@ def get_num_triangle_batched(adj_batch):
     # Extract the diagonal for each matrix in the batch
     diagonals = torch.diagonal(adj_cubed, dim1=1, dim2=2)
     return diagonals.sum(dim=1) / 6
+
 
 
 def get_mean_degree(adj_dense, num_nodes):
