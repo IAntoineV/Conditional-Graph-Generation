@@ -414,3 +414,14 @@ def compute_MAE(adj_matrices, num_nodes_batched, features_true):
     delta_normalized = SCALER_STATS(features_pred - features_true, device=adj_matrices.device)
     return delta_normalized.abs().sum(dim=-1).mean()
 
+def compute_normal_MAE(adj_matrices, num_nodes_batched, features_true):
+    features_pred = torch.stack(list(map(lambda x: create_features(*x), zip(adj_matrices, num_nodes_batched))))
+
+    delta = features_pred - features_true
+    return delta.abs().sum(dim=-1).mean()
+
+def compute_normal_MSE(adj_matrices, num_nodes_batched, features_true):
+    features_pred = torch.stack(list(map(lambda x: create_features(*x), zip(adj_matrices, num_nodes_batched))))
+
+    delta = features_pred - features_true
+    return (delta**2).sum(dim=-1).sqrt().mean()
