@@ -43,6 +43,43 @@ class Decoder(nn.Module):
         return adj
 
 
+class DecoderWithStats(nn.Module):
+    def __init__(self, latent_dim, hidden_dim, n_layers, n_nodes, stats_input_size = 7, stats_latent_size=64, tau=1):
+        super(DecoderWithStats, self).__init__()
+        self.n_layers = n_layers
+        self.n_nodes = n_nodes
+        self.stats_latent_size = stats_latent_size
+        self.tau = tau
+        print(f"Using {self.tau} as a value for tau in the Decoder")
+        self.stats_layer = nn.Linear(stats_input_size,stats_latent_size)
+        mlp_layers = [nn.Linear(latent_dim, hidden_dim)] + [nn.Linear(hidden_dim + stats_latent_size, hidden_dim) for i in
+                                                            range(n_layers - 2)]
+        mlp_layers.append(nn.Linear(hidden_dim, 2 * n_nodes * (n_nodes - 1) // 2))
+
+        self.mlp = nn.ModuleList(mlp_layers)
+        self.relu = nn.ReLU()
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x, stats):
+
+        stats_latent = self.stats_layer(stats)
+        x = self.relu(self.mlp[0](x))
+
+        for i in range(1, self.n_layers - 1):
+            xstats = torch.cat((x, stats_latent),dim=1)
+            x = self.relu(self.mlp[i](xstats))
+
+        x = self.mlp[self.n_layers - 1](x)
+        x = torch.reshape(x, (x.size(0), -1, 2))
+        x = F.gumbel_softmax(x, tau=self.tau, hard=True)[:, :, 0]
+
+        adj = torch.zeros(x.size(0), self.n_nodes, self.n_nodes, device=x.device)
+        idx = torch.triu_indices(self.n_nodes, self.n_nodes, 1)
+        adj[:, idx[0], idx[1]] = x
+        adj = adj + torch.transpose(adj, 1, 2)
+        return adj
+
+
 class GIN(torch.nn.Module):
     def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, dropout=0.2, pool_type="add"):
         super().__init__()
@@ -123,7 +160,7 @@ class SAGE(torch.nn.Module):
 
 # Variational Autoencoder
 class VariationalAutoEncoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes, use_pna=False, pool_type="add", aggregators=None, scalers=None, deg=None):
+    def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes, use_pna=False, pool_type="add", aggregators=None, scalers=None, deg=None, use_decoder=None, stats_latent_size=64):
         super(VariationalAutoEncoder, self).__init__()
         self.n_max_nodes = n_max_nodes
         self.input_dim = input_dim
@@ -134,14 +171,21 @@ class VariationalAutoEncoder(nn.Module):
             self.encoder = GIN(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc, pool_type=pool_type)
         self.fc_mu = nn.Linear(hidden_dim_enc, latent_dim)
         self.fc_logvar = nn.Linear(hidden_dim_enc, latent_dim)
-        self.decoder = Decoder(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes)
+        self.use_decoder = use_decoder
+        if use_decoder is None:
+            self.decoder = Decoder(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes)
+        elif use_decoder =="decoder_stats":
+            self.decoder= DecoderWithStats(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes,stats_latent_size=stats_latent_size)
 
     def forward(self, data):
         x_g = self.encoder(data)
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
         x_g = self.reparameterize(mu, logvar)
-        adj = self.decoder(x_g)
+        if self.use_decoder=="decoder_stats":
+            adj = self.decoder(x_g, data.stats)
+        else:
+            adj = self.decoder(x_g)
         return adj
 
     def encode(self, data):
@@ -173,7 +217,10 @@ class VariationalAutoEncoder(nn.Module):
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
         x_g = self.reparameterize(mu, logvar)
-        adj = self.decoder(x_g)
+        if self.use_decoder=="decoder_stats":
+            adj = self.decoder(x_g, data.stats)
+        else:
+            adj = self.decoder(x_g)
 
         recon = F.l1_loss(adj, data.A, reduction='mean')
         kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
@@ -284,7 +331,7 @@ class PNAEncoder(torch.nn.Module):
 
 class VariationalAutoEncoderWithInfoNCE(nn.Module):
     def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes,
-                 use_gat=False, use_pna=False, tau=1, use_pooling="add", aggregators=None, scalers=None, deg=None):
+                 use_gat=False, use_pna=False, tau=1, use_pooling="add", aggregators=None, scalers=None, deg=None,use_decoder=None, stats_latent_size=64):
         super(VariationalAutoEncoderWithInfoNCE, self).__init__()
         print("Training VariationalAutoEncoderWithInfoNCE")
         self.n_max_nodes = n_max_nodes
@@ -300,7 +347,12 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
             self.encoder = GIN(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc)
         self.fc_mu = nn.Linear(hidden_dim_enc, latent_dim)
         self.fc_logvar = nn.Linear(hidden_dim_enc, latent_dim)
-        self.decoder = Decoder(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes, tau=self.tau)
+        self.use_decoder= use_decoder
+        if use_decoder is None:
+            self.decoder = Decoder(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes, tau=self.tau)
+        elif use_decoder =="decoder_stats":
+            self.decoder= DecoderWithStats(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes,stats_latent_size=stats_latent_size)
+
 
         # Projection head for InfoNCE loss
         self.projection = nn.Sequential(
@@ -318,7 +370,10 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
         x_g = self.reparameterize(mu, logvar)
-        adj = self.decoder(x_g)
+        if self.use_decoder =="decoder_stats":
+            adj = self.decoder(x_g, data.stats)
+        else:
+            adj = self.decoder(x_g)
         return adj
 
     def encode(self, data):
@@ -341,8 +396,11 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
         adj = self.decoder(x_g)
         return adj
 
-    def decode_mu(self, mu):
-        adj = self.decoder(mu)
+    def decode_mu(self, mu, stats):
+        if self.use_decoder=="decoder_stats":
+            adj = self.decoder(mu, stats)
+        else:
+            adj = self.decoder(mu)
         return adj
 
     def infonce_loss(self, z_i, z_j, temperature=0.07):
@@ -379,7 +437,10 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
         z = self.reparameterize(mu, logvar)
-        adj = self.decoder(z)
+        if self.use_decoder =="decoder_stats":
+            adj = self.decoder(z, data.stats)
+        else:
+            adj = self.decoder(z)
         adj_cpu = adj.detach().cpu()
         num_nodes = get_num_nodes(adj_cpu)
         if full_mae:
@@ -416,7 +477,10 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
         z = self.reparameterize(mu, logvar)
-        adj = self.decoder(z)
+        if self.use_decoder=="decoder_stats":
+            adj = self.decoder(z, data.stats)
+        else:
+            adj = self.decoder(z)
 
         # Augmented data encodings
         x_g_aug = self.encoder(data_aug)
@@ -448,7 +512,10 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
         z = self.reparameterize(mu, logvar)
-        adj = self.decoder(z)
+        if self.use_decoder=="decoder_stats":
+            adj = self.decoder(z, data.stats)
+        else:
+            adj = self.decoder(z)
 
         adj_cpu = adj.detach().cpu()
         num_nodes = get_num_nodes(adj_cpu)
@@ -491,7 +558,10 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
         z = self.reparameterize(mu, logvar)
-        adj = self.decoder(z)
+        if self.use_decoder=="decoder_stats":
+           adj = self.decoder(z, data.stats)
+        else:
+            adj = self.decoder(z)
 
         adj_cpu = adj.detach().cpu()
         num_nodes = get_num_nodes(adj_cpu)
@@ -535,7 +605,10 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
         z = self.reparameterize(mu, logvar)
-        adj = self.decoder(z)
+        if self.use_decoder =="decoder_stats":
+            adj = self.decoder(z, data.stats)
+        else:
+            adj = self.decoder(z)
 
         adj_cpu = adj.detach().cpu()
         num_nodes = get_num_nodes(adj_cpu)

@@ -159,6 +159,13 @@ parser.add_argument('--loss-use-dn', type=str, default="mae", help="Type of loss
 # coef for
 parser.add_argument('--lbd-reg', type=float, default=1e-3, help="coefficient scaling the feature loss")
 
+# use_decoder = "decoder_stats", None
+parser.add_argument('--use-decoder', type=str, default=None, help="Which decoder to use")
+
+# Latent size for data.stats if use_decoder =="decoder_stats"
+parser.add_argument('--stats-latent-size', type=int, default=64,
+                    help="Latent size for data.stats if use_decoder =='decoder_stats' (default: 64)")
+
 
 logs = ""
 logs += f" Arguments used : \n"
@@ -208,7 +215,7 @@ autoencoder = VariationalAutoEncoderWithInfoNCE(args.spectral_emb_dim + 1, args.
                                                 args.hidden_dim_decoder, args.latent_dim, args.n_layers_encoder,
                                                 args.n_layers_decoder, args.n_max_nodes, use_gat=args.use_gat, use_pna=args.use_pna,
                                                 tau=args.tau, use_pooling=args.use_pooling,
-                                                aggregators=aggregators, scalers=scalers, deg=deg).to(device)
+                                                aggregators=aggregators, scalers=scalers, deg=deg, use_decoder=args.use_decoder, stats_latent_size=args.stats_latent_size).to(device)
 print("autoencoder:")
 print(autoencoder)
 optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.lr)
@@ -445,7 +452,7 @@ if args.train_denoiser:
                 samples = sample(denoise_model, data.stats, latent_dim=args.latent_dim, timesteps=args.timesteps,
                                  betas=betas, batch_size=bs)
                 x_sample = samples[-1]
-                adj = autoencoder.decode_mu(x_sample)
+                adj = autoencoder.decode_mu(x_sample, data.stats)
                 if not args.not_use_mae:
                     if args.use_text_embedding:
                         stat = data.mae_stats
@@ -509,7 +516,7 @@ else:
             samples = sample(denoise_model, data.stats, latent_dim=args.latent_dim, timesteps=args.timesteps,
                              betas=betas, batch_size=bs)
             x_sample = samples[-1]
-            adj = autoencoder.decode_mu(x_sample)
+            adj = autoencoder.decode_mu(x_sample, data.stats)
             if args.use_text_embedding:
                 stat = data.mae_stats
             mae_feats += x_g.size(0) * compute_MAE(adj.detach().cpu(), (adj.sum(dim=2) >= 1).sum(dim=-1).detach().cpu(),
@@ -543,7 +550,7 @@ with open(f"outputs/{date}_output.csv", "w", newline="") as csvfile:
         samples = sample(denoise_model, data.stats, latent_dim=args.latent_dim, timesteps=args.timesteps, betas=betas,
                          batch_size=bs)
         x_sample = samples[-1]
-        adj = autoencoder.decode_mu(x_sample).detach().cpu()
+        adj = autoencoder.decode_mu(x_sample, data.stats).detach().cpu()
         stat_d = torch.reshape(stat, (-1, args.n_condition)).detach().cpu()
 
         num_nodes = get_num_nodes(adj)
