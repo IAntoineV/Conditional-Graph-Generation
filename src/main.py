@@ -151,19 +151,19 @@ parser.add_argument('--use-pooling', type=str, default="add", help="Type of pool
 
 # Use and compute MAE
 # mae / mae_n / mse / none
-parser.add_argument('--loss-use-ae', action='store_true', default="mae", help="Type of loss to use for VAE training")
+parser.add_argument('--loss-use-ae', type=str, default="mae", help="Type of loss to use for VAE training")
 
 # mae / mae_n / mse / none
-parser.add_argument('--loss-use-dn', action='store_true', default="mae", help="Type of loss to use for denoising training")
+parser.add_argument('--loss-use-dn', type=str, default="mae", help="Type of loss to use for denoising training")
 
 # coef for
 parser.add_argument('--lbd-reg', type=float, default=1e-3, help="coefficient scaling the feature loss")
 
 
-
 logs = ""
 logs += f" Arguments used : \n"
 args = parser.parse_args()
+print(args)
 for key,val in vars(args).items():
     logs+= f"{key} : {val}\n"
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -255,11 +255,11 @@ if args.train_autoencoder:
                                                             gamma=args.gamma_vae, lbd_reg=args.lbd_reg)
 
                 train_loss_all_feats += infos["mae_features"].item()
-            elif args.loss_use_ae == "mae_r":
+            elif args.loss_use_ae == "mae_n":
                 loss, infos = autoencoder.loss_with_mae_normalized_reg(data, data_aug, beta=args.beta_vae,
                                                                        gamma=args.gamma_vae, lbd_reg=args.lbd_reg)
 
-                train_loss_all_feats += infos["mae_regularized_features"].item()
+                train_loss_all_feats += infos["mae_normalized_features"].item()
             else:
                 raise KeyError('loss_use wrong key')
             
@@ -306,11 +306,11 @@ if args.train_autoencoder:
 
                     val_loss_all_feats += infos["mae_features"].item()
                     val_mae += infos["mae"]
-                elif args.loss_use_ae == "mae_r":
+                elif args.loss_use_ae == "mae_n":
                     loss, infos = autoencoder.loss_with_mae_normalized_reg(data, data_aug, beta=args.beta_vae,
                                                                 gamma=args.gamma_vae, lbd_reg=args.lbd_reg)
 
-                    val_loss_all_feats += infos["mae_regularized_features"].item()
+                    val_loss_all_feats += infos["mae_normalized_features"].item()
                     val_mae += infos["mae"]
                 else:
                     raise KeyError('loss_use wrong key')
@@ -573,6 +573,7 @@ stat_mean= list(stat.mean(dim=0))
 stat_std = list(stat.std(dim=0))
 logs += f"\n\n Logs inference \n {logs_inference}"
 logs += f"\n Stats mean : {stat_mean} \n Stats std : {stat_std}"
+print(logs)
 if not os.path.exists("./training_logs/"):
     os.mkdir("./training_logs/")
 with open(f"./training_logs/{date}_report.txt", "w") as f:

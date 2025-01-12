@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.utils import MAE_reconstruction_loss, MAE_reconstruction_loss_normalized
+from utils import MAE_reconstruction_loss, MAE_reconstruction_loss_normalized
 from utils import MSE_reconstruction_loss
 from graph_utils import get_num_nodes
 def extract(a, t, x_shape):
