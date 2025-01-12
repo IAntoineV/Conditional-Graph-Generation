@@ -525,9 +525,11 @@ with open(f"outputs/{date}_output.csv", "w", newline="") as csvfile:
             edge_list_text = ", ".join([f"({u}, {v})" for u, v in Gs_generated.edges()])
             # Write the graph ID and the full edge list as a single row
             writer.writerow([graph_id, edge_list_text])
+
+    nb_batch = len(test_loader)
     mae_generated_normalized = mae_generated_normalized / test_size
-    mse_generated = mse_generated / test_size
-    mae_generated = mae_generated / test_size
+    mse_generated = mse_generated / nb_batch
+    mae_generated = mae_generated / nb_batch
     logs_inference = f"normalized MAE : {mae_generated_normalized:.3g} \n MAE : {mae_generated:.3g} \n MSE : {mse_generated:.3g} \n MAE per component {list(mae_per_component)}"
 
 stat = torch.concat([data.stats  for data in test_loader], dim=0)
