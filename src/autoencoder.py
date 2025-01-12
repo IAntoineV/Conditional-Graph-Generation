@@ -127,7 +127,7 @@ class GATDecoder(nn.Module):
             x_flat = F.dropout(x_flat, self.dropout, training=self.training)
             x = x_flat.view(batch_size, self.n_nodes, -1)  # -> (batch_size, n_nodes, hidden_dim)
 
-        x = self.final_layer(x)  # (batch_size, n_nodes, n_nodes)
+        x = self.last_layer(x)  # (batch_size, n_nodes, n_nodes)
 
         x = F.gumbel_softmax(x, tau=self.tau, hard=True, dim=-1)
         adj = x + x.transpose(1, 2)
