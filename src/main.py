@@ -226,7 +226,7 @@ autoencoder = VariationalAutoEncoderWithInfoNCE(args.spectral_emb_dim + 1, args.
                                                 args.hidden_dim_decoder, args.latent_dim, args.n_layers_encoder,
                                                 args.n_layers_decoder, args.n_max_nodes, use_gat=args.use_gat, use_pna=args.use_pna,
                                                 tau=args.tau, use_pooling=args.use_pooling,
-                                                aggregators=aggregators, scalers=scalers, deg=deg, use_decoder=args.use_decoder, 
+                                                aggregators=aggregators, scalers=scalers, deg=deg, use_decoder=args.use_decoder,
                                                 stats_latent_size=args.stats_latent_size, n_dec_graph_layers=args.n_dec_graph_layers, n_dec_heads=args.n_dec_heads).to(device)
 print("autoencoder:")
 print(autoencoder)
@@ -264,7 +264,7 @@ if args.train_autoencoder:
             if args.loss_use_ae == "none":
                 loss, infos = autoencoder.loss_function(data, data_aug, beta=args.beta_vae,
                                                         gamma=args.gamma_vae)
-            elif args.loss_use_ae == "mse":
+            elif args.loss_use_ae == "mse_n":
                 loss, infos = autoencoder.loss_with_mse_reg(data, data_aug, beta=args.beta_vae,
                                                             gamma=args.gamma_vae, lbd_reg=args.lbd_reg)
 
@@ -313,7 +313,7 @@ if args.train_autoencoder:
                 if args.loss_use_ae == "none":
                     loss, infos  =autoencoder.loss_function(data, data_aug, beta=args.beta_vae,
                                                                      gamma=args.gamma_vae)
-                elif args.loss_use_ae == "mse_r":
+                elif args.loss_use_ae == "mse_n":
                     loss, infos = autoencoder.loss_with_mse_reg(data, data_aug, beta=args.beta_vae,
                                                                      gamma=args.gamma_vae, lbd_reg=args.lbd_reg)
                            
@@ -569,7 +569,7 @@ with open(f"outputs/{date}_output.csv", "w", newline="") as csvfile:
         mae_generated += compute_normal_MAE(adj, num_nodes ,stat)
         mse_generated +=  compute_normal_MSE(adj, num_nodes ,stat)
         mae_generated_normalized += compute_MAE(adj, num_nodes, stat)
-        mae_per_component = torch.stack(list(map(lambda x: create_features(*x), zip(adj, num_nodes)))).abs().mean(dim=0)
+        mae_per_component = (stat-torch.stack(list(map(lambda x: create_features(*x), zip(adj, num_nodes))))).abs().mean(dim=0)
         for i in range(stat.size(0)):
 
             Gs_generated = construct_nx_from_adj(adj[i, :, :].numpy())
