@@ -358,7 +358,7 @@ if args.train_autoencoder:
                 "Val MAE": val_mae / cnt_val,
                 "Val MSE Features": val_loss_all_feats / cnt_val
             }
-            print(f'{dt_t} {", ".join([f"{key} : {value:.4g}" for key,value in logs_training_ae.items()])}')
+            print(f'{dt_t} {", ".join([f"{key} : {value:.4f}" for key,value in logs_training_ae.items()])}')
 
         scheduler.step()
 
@@ -372,12 +372,12 @@ if args.train_autoencoder:
     print("Taking best autoencoder to train denoiser")
     print(f"Loading autoencoder from {date}")
     for key,value in best_log_training_ae.items():
-        logs+=f"\n{key} : {value:.4g}"
+        logs+=f"\n{key} : {value:.4f}"
 
     checkpoint = torch.load(f'models/{date}_autoencoder_infonce.pth.tar')
     autoencoder.load_state_dict(checkpoint['state_dict'])
 else:
-    date_to_load = "2025_01_04_14_34_17"
+    date_to_load = "2025_01_12_18_21_25"
     print(f"Loading autoencoder from {date_to_load}")
     checkpoint = torch.load(f'models/{date_to_load}_autoencoder_infonce.pth.tar')
     autoencoder.load_state_dict(checkpoint['state_dict'])
@@ -473,7 +473,7 @@ if args.train_denoiser:
 
         dt_t = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         log_training_denoiser = {"epoch": epoch, "Train Loss":train_loss_all / train_count, "val_loss" : val_loss_all / val_count, "val_mae" : val_mae_feats / val_count,}
-        print(f'{dt_t} {", ".join([f"{key} : {value:.4g}" for key,value in log_training_denoiser.items()])}')
+        print(f'{dt_t} {", ".join([f"{key} : {value:.4f}" for key,value in log_training_denoiser.items()])}')
 
         scheduler.step()
 
@@ -495,7 +495,7 @@ if args.train_denoiser:
     print(f"Best Val Loss denoising : {best_val_loss / val_count}")
     print("Taking last denoising model")
     for key,val in best_log_training_denoiser.items():
-        logs += f"\n {key} : {val:.4g} "
+        logs += f"\n {key} : {val:.4f} "
     # print("Taking best denoiser to generate test data")
     # checkpoint = torch.load(f'models/{date}_denoise_model.pth.tar')
     # denoise_model.load_state_dict(checkpoint['state_dict'])

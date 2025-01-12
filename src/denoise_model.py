@@ -48,11 +48,11 @@ def p_losses_with_reg(denoise_model, x_start, t, cond, sqrt_alphas_cumprod, sqrt
 
     adj = decoder(x_reconstructed)
     num_nodes = get_num_nodes(adj).int()
-    if loss_to_use == "mse_r":
+    if loss_to_use == "mse_n":
         loss_reg = lbd_reg* MSE_reconstruction_loss(adj, num_nodes, features)
     elif loss_to_use == "mae":
         loss_reg = lbd_reg * MAE_reconstruction_loss(adj, num_nodes, features)
-    elif loss_to_use == "mae_r":
+    elif loss_to_use == "mae_n":
         loss_reg = lbd_reg * MAE_reconstruction_loss_normalized(adj, num_nodes, features)
     elif loss_to_use == "none":
         loss_reg = 0
