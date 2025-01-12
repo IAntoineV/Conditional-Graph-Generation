@@ -16,7 +16,7 @@ from torch_geometric.utils import degree
 
 from autoencoder import VariationalAutoEncoder, VariationalAutoEncoderWithInfoNCE
 from denoise_model import DenoiseNN, p_losses, sample
-from denoise_model import p_losses_with_features_reg
+from denoise_model import p_losses_with_reg
 from utils import linear_beta_schedule, construct_nx_from_adj, preprocess_dataset, subgraph_augment, edge_drop, \
     preprocess_dataset_with_pretrained_embedder, augment_graph, cosine_beta_schedule
 from utils import compute_MAE, compute_normal_MAE, compute_normal_MSE
@@ -150,7 +150,11 @@ parser.add_argument('--tau', type=float, default=1.0, help="tau argument for gum
 parser.add_argument('--use-pooling', type=str, default="add", help="Type of pooling to us in encoder")
 
 # Use and compute MAE
-parser.add_argument('--not-use-mae', action='store_true', default=False, help="Do not use MAE during training and val")
+# mae / mae_n / mse / none
+parser.add_argument('--loss-use-ae', action='store_true', default="mae", help="Type of loss to use for VAE training")
+
+# mae / mae_n / mse / none
+parser.add_argument('--loss-use-dn', action='store_true', default="mae", help="Type of loss to use for denoising training")
 
 # coef for
 parser.add_argument('--lbd-reg', type=float, default=1e-3, help="coefficient scaling the feature loss")
@@ -238,13 +242,26 @@ if args.train_autoencoder:
             optimizer.zero_grad()
             # beta = autoencoder.get_beta(epoch, max_epochs=args.epochs_autoencoder)
             # Updated loss function now returns InfoNCE loss as well
-            if args.not_use_mae:
-                loss, infos = autoencoder.loss_function(data, data_aug,beta=args.beta_vae, gamma=args.gamma_vae,)
-            else:
-                loss, infos= autoencoder.loss_with_mse_reg(data, data_aug, beta=args.beta_vae,
-            
-                                                                  gamma=args.gamma_vae, lbd_reg=args.lbd_reg)
+            if args.loss_use_ae == "none":
+                loss, infos = autoencoder.loss_function(data, data_aug, beta=args.beta_vae,
+                                                        gamma=args.gamma_vae)
+            elif args.loss_use_ae == "mse":
+                loss, infos = autoencoder.loss_with_mse_reg(data, data_aug, beta=args.beta_vae,
+                                                            gamma=args.gamma_vae, lbd_reg=args.lbd_reg)
+
                 train_loss_all_feats += infos["mse_features"].item()
+            elif args.loss_use_ae == "mae":
+                loss, infos = autoencoder.loss_with_mae_reg(data, data_aug, beta=args.beta_vae,
+                                                            gamma=args.gamma_vae, lbd_reg=args.lbd_reg)
+
+                train_loss_all_feats += infos["mae_features"].item()
+            elif args.loss_use_ae == "mae_r":
+                loss, infos = autoencoder.loss_with_mae_normalized_reg(data, data_aug, beta=args.beta_vae,
+                                                                       gamma=args.gamma_vae, lbd_reg=args.lbd_reg)
+
+                train_loss_all_feats += infos["mae_regularized_features"].item()
+            else:
+                raise KeyError('loss_use wrong key')
             
             train_loss_all_recon += infos["recon"].item()
             train_loss_all_kld += infos["kld"].item()
@@ -274,15 +291,29 @@ if args.train_autoencoder:
                 data_aug = edge_drop(data)
                 data_aug = data_aug.to(device)
 
-                if args.not_use_mae:
+                if args.loss_use_ae == "none":
                     loss, infos  =autoencoder.loss_function(data, data_aug, beta=args.beta_vae,
                                                                      gamma=args.gamma_vae)
-                else:
+                elif args.loss_use_ae == "mse":
                     loss, infos = autoencoder.loss_with_mse_reg(data, data_aug, beta=args.beta_vae,
                                                                      gamma=args.gamma_vae, lbd_reg=args.lbd_reg)
                            
                     val_loss_all_feats += infos["mse_features"].item()
                     val_mae += infos["mae"]
+                elif args.loss_use_ae == "mae":
+                    loss, infos = autoencoder.loss_with_mae_reg(data, data_aug, beta=args.beta_vae,
+                                                                gamma=args.gamma_vae, lbd_reg=args.lbd_reg)
+
+                    val_loss_all_feats += infos["mae_features"].item()
+                    val_mae += infos["mae"]
+                elif args.loss_use_ae == "mae_r":
+                    loss, infos = autoencoder.loss_with_mae_normalized_reg(data, data_aug, beta=args.beta_vae,
+                                                                gamma=args.gamma_vae, lbd_reg=args.lbd_reg)
+
+                    val_loss_all_feats += infos["mae_regularized_features"].item()
+                    val_mae += infos["mae"]
+                else:
+                    raise KeyError('loss_use wrong key')
 
                 val_loss_all_recon += infos["recon"].item()
                 val_loss_all_kld += infos["kld"].item()
@@ -383,8 +414,12 @@ if args.train_denoiser:
             optimizer.zero_grad()
             x_g = autoencoder.encode(data)
             t = torch.randint(0, args.timesteps, (x_g.size(0),), device=device).long()
-            loss,infos = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod,
+            if args.loss_use_dn == "none":
+                loss,infos = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod,
                             loss_type="huber")
+            else:
+                loss,infos = p_losses_with_reg(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, autoencoder.decoder, data.stats,
+                            loss_type="huber", loss_to_use=args.loss_use_dn)
             loss.backward()
             train_loss_all += x_g.size(0) * loss.item()
             train_count += x_g.size(0)

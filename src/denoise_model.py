@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.utils import MAE_reconstruction_loss, MAE_reconstruction_loss_normalized
 from utils import MSE_reconstruction_loss
 from graph_utils import get_num_nodes
 def extract(a, t, x_shape):
@@ -34,7 +35,8 @@ def reconstruct(x_noised, t, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod,
     return x_reconstructed
 
 # Loss function for denoising
-def p_losses_with_features_reg(denoise_model, x_start, t, cond, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, decoder, features, noise=None, loss_type="l1", lbd_reg = 1):
+def p_losses_with_reg(denoise_model, x_start, t, cond, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, decoder, features, noise=None, loss_type="l1", lbd_reg = 1,
+                          loss_to_use = "none"):
 
     infos = {}
     if noise is None:
@@ -46,8 +48,17 @@ def p_losses_with_features_reg(denoise_model, x_start, t, cond, sqrt_alphas_cump
 
     adj = decoder(x_reconstructed)
     num_nodes = get_num_nodes(adj).int()
+    if loss_to_use == "mse":
+        loss_reg = lbd_reg* MSE_reconstruction_loss(adj, num_nodes, features)
+    elif loss_to_use == "mae":
+        loss_reg = lbd_reg * MAE_reconstruction_loss(adj, num_nodes, features)
+    elif loss_to_use == "mae_r":
+        loss_reg = lbd_reg * MAE_reconstruction_loss_normalized(adj, num_nodes, features)
+    elif loss_to_use == "none":
+        loss_reg = 0
+    else:
+        raise KeyError("wrong key for regularisation loss")
 
-    loss_mse_reg = lbd_reg* MSE_reconstruction_loss(adj, num_nodes, features)
     if loss_type == 'l1':
         loss_dif = F.l1_loss(noise, predicted_noise)
     elif loss_type == 'l2':
@@ -56,13 +67,12 @@ def p_losses_with_features_reg(denoise_model, x_start, t, cond, sqrt_alphas_cump
         loss_dif = F.smooth_l1_loss(noise, predicted_noise)
     else:
         raise NotImplementedError()
-    loss = loss_dif + lbd_reg*loss_mse_reg
+    loss = loss_dif + lbd_reg*loss_reg
 
     infos["loss_dif"] = loss_dif
-    infos["loss_mse_reg"] = loss_mse_reg
+    infos["loss_reg"] = loss_reg
     infos["loss"] = loss
     return loss, infos
-
 
 
 # Loss function for denoising

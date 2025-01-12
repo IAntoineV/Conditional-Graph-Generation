@@ -408,6 +408,12 @@ def MSE_reconstruction_loss(adj_matrices, num_nodes_batched, features_true):
 def MAE_reconstruction_loss(adj_matrices, num_nodes_batched, features_true, device=None):
     features_true_projected = features_true[:, :5]
     features_pred = features_diff(adj_matrices, num_nodes_batched)
+    delta_normalized = features_pred - features_true_projected.to(adj_matrices.device)
+    return delta_normalized.abs().sum(dim=-1).mean()
+
+def MAE_reconstruction_loss_normalized(adj_matrices, num_nodes_batched, features_true, device=None):
+    features_true_projected = features_true[:, :5]
+    features_pred = features_diff(adj_matrices, num_nodes_batched)
     delta_normalized = SCALER_proj_STATS(features_pred - features_true_projected, device=adj_matrices.device)
     return delta_normalized.abs().sum(dim=-1).mean()
 
