@@ -189,6 +189,7 @@ def cosine_beta_schedule(timesteps, s=0.008):
     """
     cosine schedule as proposed in https://arxiv.org/abs/2102.09672
     """
+    print(f"Using cosine beta schedule")
     steps = timesteps + 1
     x = torch.linspace(0, timesteps, steps)
     alphas_cumprod = torch.cos(((x / timesteps) + s) / (1 + s) * torch.pi * 0.5) ** 2
@@ -198,18 +199,21 @@ def cosine_beta_schedule(timesteps, s=0.008):
 
 
 def linear_beta_schedule(timesteps):
+    print("Using linear beta schedule")
     beta_start = 0.0001
     beta_end = 0.02
     return torch.linspace(beta_start, beta_end, timesteps)
 
 
 def quadratic_beta_schedule(timesteps):
+    print("Using quadratic beta schedule")
     beta_start = 0.0001
     beta_end = 0.02
     return torch.linspace(beta_start ** 0.5, beta_end ** 0.5, timesteps) ** 2
 
 
 def sigmoid_beta_schedule(timesteps):
+    print("Using sigmoid beta schedule")
     beta_start = 0.0001
     beta_end = 0.02
     betas = torch.linspace(-6, 6, timesteps)
@@ -258,7 +262,7 @@ def augment_graph(graph, p_edges=0.1, p_nodes=0.1):
 def preprocess_dataset_with_pretrained_embedder(dataset, n_max_nodes, spectral_emb_dim):
     data_lst = []
     if dataset == 'test':
-        filename = './embedding_jina_full/jina_embed_dataset_' + dataset + '.pt'
+        filename = './bert_feats/bert_embed_dataset_' + dataset + '.pt'
         desc_file = './data/' + dataset + '/test.txt'
 
         if os.path.isfile(filename):
@@ -286,7 +290,7 @@ def preprocess_dataset_with_pretrained_embedder(dataset, n_max_nodes, spectral_e
 
 
     else:
-        filename = './embedding_jina_full/jina_embed_dataset_' + dataset + '.pt'
+        filename = './bert_feats/bert_embed_dataset_' + dataset + '.pt'
         graph_path = './data/' + dataset + '/graph'
         desc_path = './data/' + dataset + '/description'
 

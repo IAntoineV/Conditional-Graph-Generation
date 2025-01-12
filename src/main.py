@@ -18,7 +18,7 @@ from autoencoder import VariationalAutoEncoder, VariationalAutoEncoderWithInfoNC
 from denoise_model import DenoiseNN, p_losses, sample
 from denoise_model import p_losses_with_features_reg
 from utils import linear_beta_schedule, construct_nx_from_adj, preprocess_dataset, subgraph_augment, edge_drop, \
-    preprocess_dataset_with_pretrained_embedder, augment_graph
+    preprocess_dataset_with_pretrained_embedder, augment_graph, cosine_beta_schedule
 from utils import compute_MAE, compute_normal_MAE, compute_normal_MSE
 
 from graph_utils import get_num_nodes
@@ -412,6 +412,8 @@ if args.train_denoiser:
                 x_sample = samples[-1]
                 adj = autoencoder.decode_mu(x_sample)
                 if not args.not_use_mae:
+                    if args.use_text_embedding:
+                        stat = data.mae_stats
                     val_mae_feats += compute_MAE(adj.detach().cpu(), (adj.sum(dim=2) >= 1).sum(dim=-1).detach().cpu(),
                                                 stat.detach().cpu())
 
@@ -472,6 +474,8 @@ else:
                              betas=betas, batch_size=bs)
             x_sample = samples[-1]
             adj = autoencoder.decode_mu(x_sample)
+            if args.use_text_embedding:
+                stat = data.mae_stats
             mae_feats += compute_MAE(adj.detach().cpu(), (adj.sum(dim=2) >= 1).sum(dim=-1).detach().cpu(),
                                      stat.detach().cpu())
 
