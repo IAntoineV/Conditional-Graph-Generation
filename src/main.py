@@ -166,6 +166,9 @@ parser.add_argument('--use-decoder', type=str, default=None, help="Which decoder
 parser.add_argument('--stats-latent-size', type=int, default=64,
                     help="Latent size for data.stats if use_decoder =='decoder_stats' (default: 64)")
 
+parser.add_argument('--not-use-mae', action='store_true', default=False,
+                    help="Flag to enable/disable compute of MAE, usefuk when using embeddings (default: enabled)")
+
 
 logs = ""
 logs += f" Arguments used : \n"
