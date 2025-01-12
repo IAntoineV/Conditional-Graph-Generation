@@ -150,11 +150,11 @@ parser.add_argument('--tau', type=float, default=1.0, help="tau argument for gum
 parser.add_argument('--use-pooling', type=str, default="add", help="Type of pooling to us in encoder")
 
 # Use and compute MAE
-# mae / mae_n / mse / none
-parser.add_argument('--loss-use-ae', action='store_true', default="mae", help="Type of loss to use for VAE training")
+# mae / mae_n / mse_n / none
+parser.add_argument('--loss-use-ae', type=str, default="mae", help="Type of loss to use for VAE training")
 
-# mae / mae_n / mse / none
-parser.add_argument('--loss-use-dn', action='store_true', default="mae", help="Type of loss to use for denoising training")
+# mae / mae_n / mse_n / none
+parser.add_argument('--loss-use-dn', type=str, default="mae", help="Type of loss to use for denoising training")
 
 # coef for
 parser.add_argument('--lbd-reg', type=float, default=1e-3, help="coefficient scaling the feature loss")
@@ -294,7 +294,7 @@ if args.train_autoencoder:
                 if args.loss_use_ae == "none":
                     loss, infos  =autoencoder.loss_function(data, data_aug, beta=args.beta_vae,
                                                                      gamma=args.gamma_vae)
-                elif args.loss_use_ae == "mse":
+                elif args.loss_use_ae == "mse_r":
                     loss, infos = autoencoder.loss_with_mse_reg(data, data_aug, beta=args.beta_vae,
                                                                      gamma=args.gamma_vae, lbd_reg=args.lbd_reg)
                            
