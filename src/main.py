@@ -54,7 +54,7 @@ parser.add_argument('--batch-size', type=int, default=512,
                     help="Batch size for training, controlling the number of samples per gradient update (default: 256)")
 
 # Number of epochs for the autoencoder training
-parser.add_argument('--epochs-autoencoder', type=int, default=200,
+parser.add_argument('--epochs-autoencoder', type=int, default=1000,
                     help="Number of training epochs for the autoencoder (default: 200)")
 
 # Training with InfoNCE loss
@@ -153,7 +153,7 @@ parser.add_argument('--use-pooling', type=str, default="add", help="Type of pool
 parser.add_argument('--not-use-mae', action='store_true', default=False, help="Do not use MAE during training and val")
 
 # coef for
-parser.add_argument('--lbd-reg', type=float, default=2e-2, help="coefficient scaling the feature loss")
+parser.add_argument('--lbd-reg', type=float, default=1e-3, help="coefficient scaling the feature loss")
 
 
 
@@ -414,7 +414,7 @@ if args.train_denoiser:
                 if not args.not_use_mae:
                     if args.use_text_embedding:
                         stat = data.mae_stats
-                    val_mae_feats += compute_MAE(adj.detach().cpu(), (adj.sum(dim=2) >= 1).sum(dim=-1).detach().cpu(),
+                    val_mae_feats += x_g.size(0) * compute_MAE(adj.detach().cpu(), (adj.sum(dim=2) >= 1).sum(dim=-1).detach().cpu(),
                                                 stat.detach().cpu())
 
         dt_t = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
@@ -458,6 +458,7 @@ else:
         val_loss_all = 0
         val_count = 0
         mae_feats = 0
+        nb_batch = len(val_loader)
         for data in val_loader:
             data = data.to(device)
             x_g = autoencoder.encode(data)
@@ -476,7 +477,7 @@ else:
             adj = autoencoder.decode_mu(x_sample)
             if args.use_text_embedding:
                 stat = data.mae_stats
-            mae_feats += compute_MAE(adj.detach().cpu(), (adj.sum(dim=2) >= 1).sum(dim=-1).detach().cpu(),
+            mae_feats += x_g.size(0) * compute_MAE(adj.detach().cpu(), (adj.sum(dim=2) >= 1).sum(dim=-1).detach().cpu(),
                                      stat.detach().cpu())
 
     print('Val Loss: {:.5f}'.format(val_loss_all / val_count))
@@ -527,7 +528,7 @@ with open(f"outputs/{date}_output.csv", "w", newline="") as csvfile:
             writer.writerow([graph_id, edge_list_text])
 
     nb_batch = len(test_loader)
-    mae_generated_normalized = mae_generated_normalized / test_size
+    mae_generated_normalized = mae_generated_normalized / nb_batch
     mse_generated = mse_generated / nb_batch
     mae_generated = mae_generated / nb_batch
     logs_inference = f"normalized MAE : {mae_generated_normalized:.3g} \n MAE : {mae_generated:.3g} \n MSE : {mse_generated:.3g} \n MAE per component {list(mae_per_component)}"
