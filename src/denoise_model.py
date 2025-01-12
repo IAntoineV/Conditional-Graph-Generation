@@ -35,7 +35,7 @@ def reconstruct(x_noised, t, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod,
     return x_reconstructed
 
 # Loss function for denoising
-def p_losses_with_reg(denoise_model, x_start, t, cond, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, decoder, features, noise=None, loss_type="l1", lbd_reg = 1,
+def p_losses_with_reg(denoise_model, x_start, t, cond, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, autoencoder, features, noise=None, loss_type="l1", lbd_reg = 1,
                           loss_to_use = "none"):
 
     infos = {}
@@ -46,7 +46,11 @@ def p_losses_with_reg(denoise_model, x_start, t, cond, sqrt_alphas_cumprod, sqrt
     predicted_noise = denoise_model(x_noisy, t, cond)
     x_reconstructed = reconstruct(x_noisy, t, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, noise)
 
-    adj = decoder(x_reconstructed)
+    if autoencoder.use_decoder=="decoder_stats":
+        adj = autoencoder.decoder(x_reconstructed, cond)
+    else:                  
+        adj = autoencoder.decoder(x_reconstructed)
+        
     num_nodes = get_num_nodes(adj).int()
     if loss_to_use == "mse_n":
         loss_reg = lbd_reg* MSE_reconstruction_loss(adj, num_nodes, features)

@@ -377,7 +377,7 @@ if args.train_autoencoder:
     checkpoint = torch.load(f'models/{date}_autoencoder_infonce.pth.tar')
     autoencoder.load_state_dict(checkpoint['state_dict'])
 else:
-    date_to_load = "2025_01_12_18_21_25"
+    date_to_load = "2025_01_12_18_32_53"
     print(f"Loading autoencoder from {date_to_load}")
     checkpoint = torch.load(f'models/{date_to_load}_autoencoder_infonce.pth.tar')
     autoencoder.load_state_dict(checkpoint['state_dict'])
@@ -437,7 +437,7 @@ if args.train_denoiser:
                 loss,infos = p_losses(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod,
                             loss_type="huber")
             else:
-                loss,infos = p_losses_with_reg(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, autoencoder.decoder, data.stats,
+                loss,infos = p_losses_with_reg(denoise_model, x_g, t, data.stats, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, autoencoder, data.stats,
                             loss_type="huber", loss_to_use=args.loss_use_dn)
             loss.backward()
             train_loss_all += x_g.size(0) * loss.item()
