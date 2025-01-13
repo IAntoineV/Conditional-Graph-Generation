@@ -80,43 +80,44 @@ class DecoderWithStats(nn.Module):
         return adj
 
 
-class DoubleBatchMLP(nn.Module):
-    def __init__(self, input_dim, hidden_dims, output_dim):
-        """
-        Args:
-            input_dim (int): Dimensionality of the input feature vector (m).
-            hidden_dims (list of int): List of hidden layer dimensions.
-            output_dim (int): Dimensionality of the output feature vector.
-        """
-        super(DoubleBatchMLP, self).__init__()
-        layers = []
-        dims = [input_dim] + hidden_dims
-        for i in range(len(dims) - 1):
-            layers.append(nn.Linear(dims[i], dims[i+1]))
-            layers.append(nn.ReLU())
-        layers.append(nn.Linear(dims[-1], output_dim))
-        self.mlp = nn.Sequential(*layers)
 
-    def forward(self, x):
+class GobalModificationsNN(nn.Module):
+    def __init__(self, input_dim, stats_latent_size, hidden_dim, output_dim, n_layers):
         """
-        Args:
-            x (torch.Tensor): Input tensor of shape (b, n, m).
-        Returns:
-            torch.Tensor: Output tensor of shape (b, n, output_dim).
+        Special adjacency update network gloabbly aware. (type of PointNet NN)
         """
-        b, n, m = x.shape
-        # Flatten the batch and sequence dimensions into one dimension
-        x = x.view(b * n, m)
-        # Apply the MLP
-        x = self.mlp(x)
+        super(GobalModificationsNN, self).__init__()
+        input_layer = nn.Sequential(nn.Linear(input_dim+stats_latent_size, hidden_dim),
+                      nn.LeakyReLU(0.2),
+                      nn.Linear(hidden_dim, hidden_dim))
+        mlp_layers =  [input_layer] + [ nn.Sequential(nn.Linear(2*hidden_dim + stats_latent_size, hidden_dim),
+                      nn.LeakyReLU(0.2),
+                      nn.Linear(hidden_dim, hidden_dim))
+            for i in range(n_layers - 2)]
+        self.hidden_layers = nn.ModuleList(mlp_layers)
+        self.last_layer = nn.Linear(hidden_dim, output_dim)
+        self.hidden_dim = hidden_dim
+    def forward(self,adj, global_features:torch.Tensor):
+        """
+        Forward pass for GlobalModification
+        """
+        b,n,_ = adj.shape
+        global_features = global_features.view(global_features.size(0),1,global_features.size(1)) # (b,1,stat_dim)
+        flow = torch.cat((adj, global_features), dim=-1) # (b,n,n+stat_dim)
+        for layer in self.hidden_layers:
+            flow = layer(flow) # (b,n,h)
+            aggr_features = torch.sum(flow, dim=1).unsqueeze(1)  # (b,h)
+            flow = torch.cat((flow, global_features, aggr_features), dim=-1) # (b,n,n+stat_dim+h)
+
+        output = self.last_layer(aggr_features)
         # Restore the original batch and sequence dimensions
-        x = x.view(b, n, -1)
+        x = output.view(b, n, -1)
         return x
 
 
-class DecoderWithStatsGIN(nn.Module):
-    def __init__(self, latent_dim, hidden_dim, n_layers, n_nodes, stats_input_size = 7, stats_latent_size=64, tau=1, n_layers_last = 3):
-        super(DecoderWithStatsGIN, self).__init__()
+class DecoderWithStatsGlobal(nn.Module):
+    def __init__(self, latent_dim, hidden_dim, n_layers, n_nodes, stats_input_size = 7, stats_latent_size=64, tau=1, n_layers_last = 2):
+        super(DecoderWithStatsGlobal, self).__init__()
         self.n_layers = n_layers
         self.n_nodes = n_nodes
         self.stats_latent_size = stats_latent_size
@@ -131,7 +132,8 @@ class DecoderWithStatsGIN(nn.Module):
         self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
         self.n_layers_last = n_layers_last
-        self.last_layer_graph = GIN(self.n_nodes + self.stats_input_size,self.n_nodes + self.stats_input_size , self.n_nodes,self.n_layers_last )
+        self.last_layer_graph = torch.nn.ModuleList()
+        self.last_layer_graph = GobalModificationsNN(self.n_nodes,self.stats_latent_size , self.n_nodes,self.n_nodes, self.n_layers_last )
 
     def forward(self, x, stats, **kwargs):
 
@@ -155,9 +157,8 @@ class DecoderWithStatsGIN(nn.Module):
         gumbels = -torch.empty_like(logits).exponential_().log()  # Gumbel(0, 1)
 
         gumbels = (logits + gumbels) / tau  # Gumbel(logits, tau)
-
+        gumbels[:, torch.arange(self.num_max_nodes), torch.arange(self.num_max_nodes)] -=1000 #take away self loops
         y_soft = torch.sigmoid(gumbels)  # to proba
-        # y_soft[:, np.arange(self.num_max_nodes), np.arange(self.num_max_nodes)] = 0 #TODO do not work with backward ??? (line take away self loops)
         y_soft = 1 / 2 * (y_soft + y_soft.permute(0, 2, 1)) # symmetry of adj
         if hard:
             # Hard thresholding for binary adjacency matrix

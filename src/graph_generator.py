@@ -80,10 +80,10 @@ class GraphGenerator(torch.nn.Module):
 
         # Apply Gumbel-Softmax transformation
         gumbels = (logits + gumbels) / tau  # ~Gumbel(logits, tau)
-
+        gumbels[:, torch.arange(self.num_max_nodes), torch.arange(self.num_max_nodes)] -= 100
         # Softmax is applied elementwise to the adjacency matrix
         y_soft = torch.sigmoid(gumbels)  # Sigmoid ensures probabilistic edge weights remain in [0, 1]
-        #y_soft[:, np.arange(self.num_max_nodes), np.arange(self.num_max_nodes)] *= 0
+        #y_soft[:, torch.arange(self.num_max_nodes), torch.arange(self.num_max_nodes)] *= 0
         y_soft = 1/2 * ( y_soft + y_soft.permute(0, 2, 1))
         if hard:
             # Hard thresholding for binary adjacency matrix
