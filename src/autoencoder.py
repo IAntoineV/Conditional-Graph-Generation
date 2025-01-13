@@ -80,6 +80,94 @@ class DecoderWithStats(nn.Module):
         return adj
 
 
+class DoubleBatchMLP(nn.Module):
+    def __init__(self, input_dim, hidden_dims, output_dim):
+        """
+        Args:
+            input_dim (int): Dimensionality of the input feature vector (m).
+            hidden_dims (list of int): List of hidden layer dimensions.
+            output_dim (int): Dimensionality of the output feature vector.
+        """
+        super(DoubleBatchMLP, self).__init__()
+        layers = []
+        dims = [input_dim] + hidden_dims
+        for i in range(len(dims) - 1):
+            layers.append(nn.Linear(dims[i], dims[i+1]))
+            layers.append(nn.ReLU())
+        layers.append(nn.Linear(dims[-1], output_dim))
+        self.mlp = nn.Sequential(*layers)
+
+    def forward(self, x):
+        """
+        Args:
+            x (torch.Tensor): Input tensor of shape (b, n, m).
+        Returns:
+            torch.Tensor: Output tensor of shape (b, n, output_dim).
+        """
+        b, n, m = x.shape
+        # Flatten the batch and sequence dimensions into one dimension
+        x = x.view(b * n, m)
+        # Apply the MLP
+        x = self.mlp(x)
+        # Restore the original batch and sequence dimensions
+        x = x.view(b, n, -1)
+        return x
+
+
+class DecoderWithStatsGIN(nn.Module):
+    def __init__(self, latent_dim, hidden_dim, n_layers, n_nodes, stats_input_size = 7, stats_latent_size=64, tau=1, n_layers_last = 3):
+        super(DecoderWithStatsGIN, self).__init__()
+        self.n_layers = n_layers
+        self.n_nodes = n_nodes
+        self.stats_latent_size = stats_latent_size
+        self.tau = tau
+        print(f"Using {self.tau} as a value for tau in the Decoder")
+        self.stats_layer = nn.Linear(stats_input_size,stats_latent_size)
+        mlp_layers = [nn.Linear(latent_dim, hidden_dim)] + [nn.Linear(hidden_dim + stats_latent_size, hidden_dim) for i in
+                                                            range(n_layers - 2)]
+        mlp_layers.append(nn.Linear(hidden_dim, n_nodes**2))
+
+        self.mlp = nn.ModuleList(mlp_layers)
+        self.relu = nn.ReLU()
+        self.sigmoid = nn.Sigmoid()
+        self.n_layers_last = n_layers_last
+        self.last_layer_graph = GIN(self.n_nodes + self.stats_input_size,self.n_nodes + self.stats_input_size , self.n_nodes,self.n_layers_last )
+
+    def forward(self, x, stats, **kwargs):
+
+        stats_latent = self.stats_layer(stats)
+        x = self.relu(self.mlp[0](x))
+
+        for i in range(1, self.n_layers - 1):
+            xstats = torch.cat((x, stats_latent),dim=1)
+            x = self.relu(self.mlp[i](xstats))
+
+        x = self.mlp[self.n_layers - 1](x)
+        adj_logits = torch.reshape(x, (x.size(0), self.n_nodes, self.n_nodes))
+
+        adj_logits = self.last_layer_graph(adj_logits)
+        return self.gumbel_adj(adj_logits, **kwargs)
+
+    def gumbel_adj(self, adj, tau=1, hard=True):
+
+        logits = adj
+
+        gumbels = -torch.empty_like(logits).exponential_().log()  # Gumbel(0, 1)
+
+        gumbels = (logits + gumbels) / tau  # Gumbel(logits, tau)
+
+        y_soft = torch.sigmoid(gumbels)  # to proba
+        # y_soft[:, np.arange(self.num_max_nodes), np.arange(self.num_max_nodes)] = 0 #TODO do not work with backward ??? (line take away self loops)
+        y_soft = 1 / 2 * (y_soft + y_soft.permute(0, 2, 1)) # symmetry of adj
+        if hard:
+            # Hard thresholding for binary adjacency matrix
+            y_hard = (y_soft > 0.5).float()  # Threshold at 0.5 for binary edges
+            # Straight-through estimator for gradients
+            return y_hard - y_soft.detach() + y_soft
+        else:
+            # Return soft adjacency matrix
+            return y_soft
+
 class GATDecoder(nn.Module):
     def __init__(self, latent_dim, hidden_dim, n_layers, n_nodes, tau=1, n_graph_layers=1, heads=1, dropout=0.2):
         super(GATDecoder, self).__init__()

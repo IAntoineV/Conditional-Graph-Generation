@@ -83,7 +83,8 @@ class GraphGenerator(torch.nn.Module):
 
         # Softmax is applied elementwise to the adjacency matrix
         y_soft = torch.sigmoid(gumbels)  # Sigmoid ensures probabilistic edge weights remain in [0, 1]
-
+        #y_soft[:, np.arange(self.num_max_nodes), np.arange(self.num_max_nodes)] *= 0
+        y_soft = 1/2 * ( y_soft + y_soft.permute(0, 2, 1))
         if hard:
             # Hard thresholding for binary adjacency matrix
             y_hard = (y_soft > 0.5).float()  # Threshold at 0.5 for binary edges
