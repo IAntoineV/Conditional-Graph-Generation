@@ -121,10 +121,10 @@ parser.add_argument('--n-condition', type=int, default=7,
                     help="Number of distinct condition properties used in conditional vector (default: 7)")
 
 # Beta for loss in VAE
-parser.add_argument('--beta-vae', type=float, default=1e-6, help="Beta for loss in VAE")
+parser.add_argument('--beta-vae', type=float, default=1e-5, help="Beta for loss in VAE")
 
 # Gamma for loss in VAE
-parser.add_argument('--gamma-vae', type=float, default=1e-5, help="Gamma for loss in VAE")
+parser.add_argument('--gamma-vae', type=float, default=4e-2, help="Gamma for loss in VAE")
 
 # Flag use extracted number or text text_embedding
 parser.add_argument('--use-text-embedding', action='store_true', default=False,
@@ -141,8 +141,8 @@ parser.add_argument('--use-denoiser-onecyclelr', action='store_true', default=Fa
                     help="Flag to use OneCycleLR scheduler for denoiser")
 
 # Number of graph layers used in decoder
-parser.add_argument('--n-dec-graph-layers', type=int, default=1,
-                    help="Number of graph layers used in the decoder, if --use-decoder is in: ['gat']")
+parser.add_argument('--n-dec-graph-layers', type=int, default=2,
+                    help="Number of graph layers used in the decoder, if --use-decoder is in: ['gat', 'global']")
 
 # If using GATDecoder, number of heads used
 parser.add_argument('--n-dec-heads', type=int, default=1,
@@ -159,16 +159,16 @@ parser.add_argument('--use-pooling', type=str, default="add", help="Type of pool
 
 # Use and compute MAE
 # mae / mae_n / mse_n / none
-parser.add_argument('--loss-use-ae', type=str, default="mae", help="Type of loss to use for VAE training")
+parser.add_argument('--loss-use-ae', type=str, default="none", help="Type of loss to use for VAE training")
 
 # mae / mae_n / mse_n / none
-parser.add_argument('--loss-use-dn', type=str, default="mae", help="Type of loss to use for denoising training")
+parser.add_argument('--loss-use-dn', type=str, default="none", help="Type of loss to use for denoising training")
 
 # coef for
 parser.add_argument('--lbd-reg', type=float, default=1e-3, help="coefficient scaling the feature loss")
 
-# use_decoder = "decoder_stats", None
-parser.add_argument('--use-decoder', type=str, default=None, help="Which decoder to use")
+# use_decoder = "decoder_stats", None, "global"
+parser.add_argument('--use-decoder', type=str, default="global", help="Which decoder to use")
 
 # Latent size for data.stats if use_decoder =="decoder_stats"
 parser.add_argument('--stats-latent-size', type=int, default=64,

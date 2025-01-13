@@ -103,10 +103,11 @@ class GobalModificationsNN(nn.Module):
         """
         b,n,_ = adj.shape
         global_features = global_features.view(global_features.size(0),1,global_features.size(1)) # (b,1,stat_dim)
+        global_features = global_features.expand(-1, n, -1) # (b,n,stat_dim)
         flow = torch.cat((adj, global_features), dim=-1) # (b,n,n+stat_dim)
         for layer in self.hidden_layers:
             flow = layer(flow) # (b,n,h)
-            aggr_features = torch.sum(flow, dim=1).unsqueeze(1)  # (b,h)
+            aggr_features = torch.sum(flow, dim=1, keepdim=True).expand(-1, n, -1)  # (b,n,h)
             flow = torch.cat((flow, global_features, aggr_features), dim=-1) # (b,n,n+stat_dim+h)
 
         output = self.last_layer(aggr_features)
@@ -116,11 +117,12 @@ class GobalModificationsNN(nn.Module):
 
 
 class DecoderWithStatsGlobal(nn.Module):
-    def __init__(self, latent_dim, hidden_dim, n_layers, n_nodes, stats_input_size = 7, stats_latent_size=64, tau=1, n_layers_last = 2):
+    def __init__(self, latent_dim, hidden_dim, n_layers, n_nodes, stats_input_size = 7, stats_latent_size=64, tau=1, n_graph_layers = 2):
         super(DecoderWithStatsGlobal, self).__init__()
         self.n_layers = n_layers
         self.n_nodes = n_nodes
         self.stats_latent_size = stats_latent_size
+        self.stats_input_size = stats_input_size
         self.tau = tau
         print(f"Using {self.tau} as a value for tau in the Decoder")
         self.stats_layer = nn.Linear(stats_input_size,stats_latent_size)
@@ -131,9 +133,9 @@ class DecoderWithStatsGlobal(nn.Module):
         self.mlp = nn.ModuleList(mlp_layers)
         self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
-        self.n_layers_last = n_layers_last
+        self.n_layers_last = n_graph_layers
         self.last_layer_graph = torch.nn.ModuleList()
-        self.last_layer_graph = GobalModificationsNN(self.n_nodes,self.stats_latent_size , self.n_nodes,self.n_nodes, self.n_layers_last )
+        self.last_layer_graph = GobalModificationsNN(self.n_nodes,self.stats_input_size , self.n_nodes,self.n_nodes, self.n_layers_last )
 
     def forward(self, x, stats, **kwargs):
 
@@ -147,7 +149,7 @@ class DecoderWithStatsGlobal(nn.Module):
         x = self.mlp[self.n_layers - 1](x)
         adj_logits = torch.reshape(x, (x.size(0), self.n_nodes, self.n_nodes))
 
-        adj_logits = self.last_layer_graph(adj_logits)
+        adj_logits = self.last_layer_graph(adj_logits, stats)
         return self.gumbel_adj(adj_logits, **kwargs)
 
     def gumbel_adj(self, adj, tau=1, hard=True):
@@ -157,7 +159,7 @@ class DecoderWithStatsGlobal(nn.Module):
         gumbels = -torch.empty_like(logits).exponential_().log()  # Gumbel(0, 1)
 
         gumbels = (logits + gumbels) / tau  # Gumbel(logits, tau)
-        gumbels[:, torch.arange(self.num_max_nodes), torch.arange(self.num_max_nodes)] -=1000 #take away self loops
+        gumbels[:, torch.arange(self.n_nodes), torch.arange(self.n_nodes)] -=1000 #take away self loops
         y_soft = torch.sigmoid(gumbels)  # to proba
         y_soft = 1 / 2 * (y_soft + y_soft.permute(0, 2, 1)) # symmetry of adj
         if hard:
@@ -322,6 +324,8 @@ class VariationalAutoEncoder(nn.Module):
             self.decoder= DecoderWithStats(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes,stats_latent_size=stats_latent_size)
         elif use_decoder == "gat":
             self.decoder = GATDecoder(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes, tau=1, n_graph_layers=n_dec_graph_layers, heads=n_dec_heads)
+        elif use_decoder == "global":
+            self.decoder = DecoderWithStatsGlobal(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes, n_graph_layers=n_dec_graph_layers)
         else:
             raise ValueError(f"{use_decoder} decoder is not supported")
 
@@ -365,7 +369,7 @@ class VariationalAutoEncoder(nn.Module):
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
         x_g = self.reparameterize(mu, logvar)
-        if self.use_decoder=="decoder_stats":
+        if self.use_decoder=="decoder_stats" or self.use_decoder=="global":
             adj = self.decoder(x_g, data.stats)
         else:
             adj = self.decoder(x_g)
@@ -502,6 +506,9 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
             self.decoder= DecoderWithStats(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes,stats_latent_size=stats_latent_size)
         elif use_decoder == "gat":
             self.decoder = GATDecoder(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes, tau, n_graph_layers=n_dec_graph_layers, heads=n_dec_heads)
+        elif use_decoder == "global":
+            self.decoder = DecoderWithStatsGlobal(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes,
+                                                  n_graph_layers=n_dec_graph_layers)
         else:
             raise ValueError(f"{use_decoder} decoder is not supported")
 
@@ -548,7 +555,7 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
         return adj
 
     def decode_mu(self, mu, stats):
-        if self.use_decoder=="decoder_stats":
+        if self.use_decoder=="decoder_stats" or self.use_decoder=='global':
             adj = self.decoder(mu, stats)
         else:
             adj = self.decoder(mu)
@@ -628,7 +635,7 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
         z = self.reparameterize(mu, logvar)
-        if self.use_decoder=="decoder_stats":
+        if self.use_decoder=="decoder_stats" or self.use_decoder=='global':
             adj = self.decoder(z, data.stats)
         else:
             adj = self.decoder(z)
@@ -709,7 +716,7 @@ class VariationalAutoEncoderWithInfoNCE(nn.Module):
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
         z = self.reparameterize(mu, logvar)
-        if self.use_decoder=="decoder_stats":
+        if self.use_decoder=="decoder_stats" or self.use_decoder=="global":
            adj = self.decoder(z, data.stats)
         else:
             adj = self.decoder(z)
