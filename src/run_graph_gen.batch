@@ -12,13 +12,13 @@
 
 ## For gres: either 1g.10gb:[1:10] for prod10, 2g.20gb:[1:4] for prod20, 3g.40gb:1 for prod40 or A100.80gb for prod80.
 
-##SBATCH --partition=prod10
-##SBATCH --gres=gpu:1g.10gb:1
-##SBATCH --cpus-per-task=4
-
-#SBATCH --partition=prod20
-#SBATCH --gres=gpu:2g.20gb:1
+#SBATCH --partition=prod10
+#SBATCH --gres=gpu:1g.10gb:1
 #SBATCH --cpus-per-task=4
+
+##SBATCH --partition=prod20
+##SBATCH --gres=gpu:2g.20gb:1
+##SBATCH --cpus-per-task=4
 
 ##SBATCH --partition=prod40
 ##SBATCH --gres=gpu:3g.40gb:1
@@ -54,7 +54,7 @@
 
 ## Setup
 source /raid/home/detectionfeuxdeforet/caillaud_gab/altegrad/venv_altegrad/bin/activate
-cd /raid/home/detectionfeuxdeforet/caillaud_gab/altegrad/Conditional-Graph-Generation/src
+cd /raid/home/detectionfeuxdeforet/caillaud_gab/altegrad/
 
 # Create a directory to store the logs
 initial_date=$(date +"%Y%m%d_%H%M%S")
@@ -63,6 +63,7 @@ mkdir -p "$log_dir"
 
 export CUDA_LAUNCH_BLOCKING=1
 
-python main.py   --train-autoencoder --train-denoiser --batch-size=256 --dropout=0.2 --n-layers-encoder=8 --hidden-dim-encoder=64 --n-layers-decoder=3 --hidden-dim-decoder=256 --lr=0.001 --epochs-autoencoder=600 --epochs-denoise=500 --n-layers-denoise=3 --hidden-dim-denoise=512 --train-infonce --timesteps=700 --use-gat --latent-dim=32  --n-max-nodes=50 --lbd-reg=9e-5 --beta-vae=7e-5 > $log_dir/log.logs 2>&1
-# --n-condition=384 --dim-condition=128 --use-text-embedding
-# -use-text-embedding --n-condition=128 --dim-condition=128  
+python Conditional-Graph-Generation/src/main.py  --train-autoencoder --train-denoiser --loss-use-ae="mae_n" --loss-use-dn="mae_n" --batch-size=256 --dropout=0.2 --n-layers-encoder=8 --hidden-dim-encoder=64 --n-layers-decoder=7 --hidden-dim-decoder=256 --lr=0.001 --epochs-autoencoder=3000 --epochs-denoise=2000 --n-layers-denoise=3 --hidden-dim-denoise=512 --train-infonce --timesteps=700 --use-gat --latent-dim=32  --n-max-nodes=50 --beta-vae=5e-5 --gamma-vae=1e-6 --lbd-reg=5e-2  --use-decoder="decoder_stats" > $log_dir/log.logs 2>&1
+ 
+# inference with decoder only
+# python Conditional-Graph-Generation/src/inference.py  --loss-use-ae="none" --loss-use-dn="none" --batch-size=256 --dropout=0.2 --n-layers-encoder=8 --hidden-dim-encoder=64 --n-layers-decoder=7 --hidden-dim-decoder=256 --lr=0.001 --epochs-autoencoder=3000 --epochs-denoise=2000 --n-layers-denoise=3 --hidden-dim-denoise=512 --train-infonce --timesteps=700 --use-gat --latent-dim=32  --n-max-nodes=50 --beta-vae=5e-5 --gamma-vae=1e-6 --lbd-reg=0.1  --use-decoder="decoder_stats" > $log_dir/log.logs 2>&1
