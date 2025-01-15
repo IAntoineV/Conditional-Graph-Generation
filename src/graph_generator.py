@@ -93,3 +93,90 @@ class GraphGenerator(torch.nn.Module):
         else:
             # Return soft adjacency matrix
             return y_soft
+
+
+class GraphGenerator2(torch.nn.Module):
+    def __init__(self, num_nodes_batched, device, tau=1):
+        """
+        Initialize the GraphGenerator with a batch of logit matrices.
+        """
+        super().__init__()
+        self.num_nodes_batched = num_nodes_batched.to(device)
+        self.nb_adj = len(num_nodes_batched)
+        self.num_max_nodes = torch.max(self.num_nodes_batched).item()
+        self.device = device
+        self.tau = tau
+
+        # Create a single learnable tensor for all adjacency matrices
+        self.adj_logits = torch.nn.Parameter(
+            torch.randn(self.nb_adj, self.num_max_nodes * (self.num_max_nodes - 1) // 2, 2, device=device)
+        )
+
+    def generate_graph(self, tau=None, hard=True):
+        if tau is None:
+            tau = self.tau
+
+        # Reshape logits and apply Gumbel-Softmax
+        x = self.adj_logits
+        x = F.gumbel_softmax(x, tau=tau, hard=hard)[:, :, 0]  # Use the first output of Gumbel-Softmax
+
+        # Create adjacency matrices
+        adj = torch.zeros(self.nb_adj, self.num_max_nodes, self.num_max_nodes, device=x.device)
+        idx = torch.triu_indices(self.num_max_nodes, self.num_max_nodes, 1)
+        adj[:, idx[0], idx[1]] = x
+        adj = adj + adj.transpose(1, 2)  # Make adjacency symmetric
+        mask = torch.zeros(self.nb_adj, self.num_max_nodes, self.num_max_nodes, device=x.device, dtype=torch.bool)
+        for k, num_node in enumerate(self.num_nodes_batched):
+            mask[k, :num_node, :num_node] = 1
+        adj = adj * mask
+        return adj
+
+
+
+class GraphGenerator3(torch.nn.Module):
+    def __init__(self, num_nodes_batched, num_communities_batched, device, tau=1):
+        """
+        Initialize the GraphGenerator with a batch of logit matrices.
+        """
+        super().__init__()
+        self.num_nodes_batched = num_nodes_batched.to(device)
+        self.nb_adj = num_communities_batched.sum().int()
+        self.num_max_nodes = torch.max(self.num_nodes_batched).item()
+        self.device = device
+        self.tau = tau
+
+        # Create a single learnable tensor for all adjacency matrices
+        self.adj_logits = torch.nn.Parameter(
+            torch.randn(self.nb_adj, self.num_max_nodes * (self.num_max_nodes - 1) // 2, 2, device=device)
+        )
+        self.nb_graphs = len(num_communities_batched)
+        batch_indices = torch.arange(self.nb_graphs)
+        # Repeat each batch index based on the values in num_communities_tensor
+        self.batch = batch_indices.repeat_interleave(num_communities_batched).to(self.device)
+        assert len(self.batch) == self.nb_adj, "should always be true"
+
+    def generate_graph(self, tau=None, hard=True):
+        if tau is None:
+            tau = self.tau
+
+        # Reshape logits and apply Gumbel-Softmax
+        x = self.adj_logits
+        x = F.gumbel_softmax(x, tau=tau, hard=hard)[:, :, 0]  # Use the first output of Gumbel-Softmax
+
+        # Create adjacency matrices
+        adj = torch.zeros(self.nb_adj, self.num_max_nodes, self.num_max_nodes, device=x.device)
+        idx = torch.triu_indices(self.num_max_nodes, self.num_max_nodes, 1)
+        adj[:, idx[0], idx[1]] = x
+        adj = adj + adj.transpose(1, 2)  # Make adjacency symmetric
+
+        return adj
+    def regroup(self, adjs_subgraph):
+        adjs = torch.zeros((self.nb_graphs, self.num_max_nodes, self.num_max_nodes), dtype=torch.float).to(
+            adjs_subgraph.device)
+        adjs.index_add_(0, self.batch, adjs_subgraph)
+
+        mask = torch.zeros(self.nb_graphs, self.num_max_nodes, self.num_max_nodes, device=adjs.device, dtype=torch.bool)
+        for k, num_node in enumerate(self.num_nodes_batched):
+            mask[k, :num_node, :num_node] = 1
+        adjs = adjs * mask
+        return adjs

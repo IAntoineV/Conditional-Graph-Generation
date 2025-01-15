@@ -25,6 +25,22 @@ def get_num_nodes_diff_batched(adj_batch):
     degree = adj_batch.sum(dim=-1)
     return (1-torch.exp(-2*degree)).sum(-1)
 
+def get_degree_subgraph_batched(adj_batch, nb_graphs, batch):
+    """
+    Compute the degree of each graph.
+    :param adj_batch:
+    :return:
+    """
+    nb_nodes_per_subgraph = adj_batch.sum(dim=-1)
+    degree_per_graph = torch.zeros(nb_graphs, dtype=torch.float).to(adj_batch.device)
+    degree_per_graph.index_add_(0, batch, nb_nodes_per_subgraph)
+    return degree_per_graph
+
+def get_num_nodes_subgraph_batched(adj_batch, nb_graphs, batch):
+
+    degree = get_degree_subgraph_batched(adj_batch, nb_graphs, batch)
+
+    return (1-torch.exp(-2*degree)).sum(-1)
 
 def get_num_triangle(adj_dense):
     """
@@ -45,7 +61,26 @@ def get_num_triangle_batched(adj_batch):
     diagonals = torch.diagonal(adj_cubed, dim1=1, dim2=2)
     return diagonals.sum(dim=1) / 6
 
+def get_num_triangle_subgraph_batched(adj_batch, nb_graphs, batch):
 
+    num_triangles = get_num_triangle_batched(adj_batch)
+    triangles_per_graph = torch.zeros(nb_graphs, dtype=torch.float).to(adj_batch.device)
+    triangles_per_graph.index_add_(0, batch, num_triangles)
+    return triangles_per_graph
+
+
+
+def get_nb_edges(adj_dense):
+    return adj_dense.sum() /2
+
+def get_nb_edges_batched(adj_batch):
+    return adj_batch.sum(dim=(1,2)) /2
+
+def get_nb_edges_subgraph_batched(adj_batch, nb_graphs, batch):
+    nb_edges_subgraphs = get_nb_edges_batched(adj_batch)
+    nb_edges = torch.zeros(nb_graphs, dtype=torch.float).to(adj_batch.device)
+    nb_edges.index_add_(0, batch, nb_edges_subgraphs)
+    return nb_edges
 
 def get_mean_degree(adj_dense, num_nodes):
     """
@@ -57,13 +92,14 @@ def get_mean_degree(adj_dense, num_nodes):
 
 def get_mean_degree_batched(adj_batch, num_nodes_batched):
 
-    return adj_batch.sum(dim=(1,2)) / num_nodes_batched
+    return adj_batch.sum(dim=(1,2))  / num_nodes_batched
 
-def get_nb_edges(adj_dense):
-    return adj_dense.sum() /2
+def get_mean_degree_subgraph_batched(adj_batch, nb_nodes_batched, nb_graphs, batch):
+    nb_edges = get_nb_edges_subgraph_batched(adj_batch, nb_graphs, batch)
 
-def get_nb_edges_batched(adj_batch):
-    return adj_batch.sum(dim=(1,2)) /2
+    return nb_edges / nb_nodes_batched
+
+
 
 def get_g_cluster_coef(adj_dense, num_triangle, epsilon=1):
     """
@@ -81,6 +117,13 @@ def get_g_cluster_coef_batched(adj_batch, num_triangle_batched, epsilon=1):
 
     degrees = adj_batch.sum(dim=-1)
     return 6 * num_triangle_batched / ((degrees * (degrees - 1)).sum(dim=-1) + epsilon)
+
+
+def get_g_cluster_coef_subgraph_batched(adj_batch, num_triangle_batched, nb_graphs, batch,epsilon=1):
+
+    degrees = get_degree_subgraph_batched(adj_batch, nb_graphs, batch)
+    return 6 * num_triangle_batched / ((degrees * (degrees - 1)).sum(dim=-1) + epsilon)
+
 
 def get_max_k_core(edge_index, num_nodes):
     """
@@ -159,6 +202,7 @@ def create_features(adj,num_nodes, edge_index = None):
 
 
 
+
 def features_diff(adj_matrices, num_nodes_batched):
 
     nb_nodes = get_num_nodes_diff_batched(adj_matrices)
@@ -168,4 +212,26 @@ def features_diff(adj_matrices, num_nodes_batched):
     g_cluster_coef = get_g_cluster_coef_batched(adj_matrices, nb_triangles)
     features_pred = torch.stack([nb_nodes,nb_edges,degree_avr,nb_triangles,g_cluster_coef]).T
     return features_pred
+
+def featres_diff_sugraph_batch(adj_matrices, num_nodes_batched: torch.Tensor, batch):
+    nb_graph = len(num_nodes_batched)
+    nb_nodes = get_num_nodes_subgraph_batched(adj_matrices, nb_graph, batch)
+    nb_edges = get_nb_edges_subgraph_batched(adj_matrices, nb_graph, batch)
+    degree_avr = get_mean_degree_subgraph_batched(adj_matrices, num_nodes_batched, nb_graph, batch)
+    nb_triangles = get_num_triangle_subgraph_batched(adj_matrices, nb_graph, batch)
+    g_cluster_coef = get_g_cluster_coef_subgraph_batched(adj_matrices, nb_triangles, nb_graph, batch)
+    features_pred = torch.stack([nb_nodes, nb_edges, degree_avr, nb_triangles, g_cluster_coef]).T
+    return features_pred
+
+def subgraph_separation_loss(adj_matrices, nb_graphs, batch, T=3):
+    num_max_nodes = adj_matrices.shape[-1]
+    degree_subgraph = adj_matrices.sum(dim=-1)
+    mask_node_subgraph_diff = 1 - torch.exp(-T * degree_subgraph)
+    mask_batch_accumulated = torch.zeros((nb_graphs,num_max_nodes), dtype=torch.float).to(adj_matrices.device)
+    mask_batch_accumulated.index_add_(0, batch, mask_node_subgraph_diff)
+    mask_batch_accumulated -= 1
+    overlapping_coef = 1-torch.exp(-1*torch.nn.functional.relu(mask_batch_accumulated))
+    loss_separation = overlapping_coef.sum(dim=-1).mean()
+    return loss_separation
+
 
