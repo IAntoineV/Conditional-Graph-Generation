@@ -168,7 +168,7 @@ parser.add_argument('--loss-use-dn', type=str, default="none", help="Type of los
 parser.add_argument('--lbd-reg', type=float, default=1e-3, help="coefficient scaling the feature loss")
 
 # use_decoder = "decoder_stats", None, "global"
-parser.add_argument('--use-decoder', type=str, default="global", help="Which decoder to use")
+parser.add_argument('--use-decoder', type=str, default=None, help="Which decoder to use")
 
 # Latent size for data.stats if use_decoder =="decoder_stats"
 parser.add_argument('--stats-latent-size', type=int, default=64,
@@ -377,7 +377,7 @@ if args.train_autoencoder:
     checkpoint = torch.load(f'models/{date}_autoencoder_infonce.pth.tar')
     autoencoder.load_state_dict(checkpoint['state_dict'])
 else:
-    date_to_load = "2025_01_12_18_32_53"
+    date_to_load = "2025_01_14_14_59_38"
     print(f"Loading autoencoder from {date_to_load}")
     checkpoint = torch.load(f'models/{date_to_load}_autoencoder_infonce.pth.tar')
     autoencoder.load_state_dict(checkpoint['state_dict'])
@@ -500,7 +500,7 @@ if args.train_denoiser:
     # checkpoint = torch.load(f'models/{date}_denoise_model.pth.tar')
     # denoise_model.load_state_dict(checkpoint['state_dict'])
 else:
-    date_denoiser_to_load = "2025_01_04_14_34_17"
+    date_denoiser_to_load = "2025_01_14_14_59_38"
     print(f"Loading denoiser from {date_denoiser_to_load}")
     checkpoint = torch.load(f'models/{date_denoiser_to_load}_denoise_model.pth.tar')
     denoise_model.load_state_dict(checkpoint['state_dict'])
@@ -550,6 +550,7 @@ with open(f"outputs/{date}_output.csv", "w", newline="") as csvfile:
     mae_generated_normalized = 0
     mse_generated = 0
     mae_generated =0
+    mae_per_component = torch.zeros(7)
     test_size = 0
 
     for k, data in enumerate(tqdm(test_loader, desc='Processing test set', )):
@@ -569,7 +570,7 @@ with open(f"outputs/{date}_output.csv", "w", newline="") as csvfile:
         mae_generated += compute_normal_MAE(adj, num_nodes ,stat)
         mse_generated +=  compute_normal_MSE(adj, num_nodes ,stat)
         mae_generated_normalized += compute_MAE(adj, num_nodes, stat)
-        mae_per_component = (stat-torch.stack(list(map(lambda x: create_features(*x), zip(adj, num_nodes))))).abs().mean(dim=0)
+        mae_per_component += (stat-torch.stack(list(map(lambda x: create_features(*x), zip(adj, num_nodes))))).abs().mean(dim=0)
         for i in range(stat.size(0)):
 
             Gs_generated = construct_nx_from_adj(adj[i, :, :].numpy())
@@ -585,7 +586,7 @@ with open(f"outputs/{date}_output.csv", "w", newline="") as csvfile:
     mae_generated_normalized = mae_generated_normalized / nb_batch
     mse_generated = mse_generated / nb_batch
     mae_generated = mae_generated / nb_batch
-    logs_inference = f"normalized MAE : {mae_generated_normalized:.3g} \n MAE : {mae_generated:.3g} \n MSE : {mse_generated:.3g} \n MAE per component {list(mae_per_component)}"
+    logs_inference = f"normalized MAE : {mae_generated_normalized:.3g} \n MAE : {mae_generated:.3g} \n MSE : {mse_generated:.3g} \n MAE per component {list(mae_per_component /nb_batch )}"
 
 stat = torch.concat([data.stats  for data in test_loader], dim=0)
 stat_mean= list(stat.mean(dim=0))
